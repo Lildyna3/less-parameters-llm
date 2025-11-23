@@ -1,0 +1,357 @@
+<!DOCTYPE html>
+<html lang="en" >
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>EMAXION STUDIOS</title>
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=Poppins:wght@400;700&display=swap');
+
+    /* Reset */
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      font-family: 'Poppins', sans-serif;
+      color: #bbb; /* soft grey */
+      background: #000;
+      scroll-behavior: smooth;
+      min-height: 150vh; /* force scroll */
+      display: flex;
+      flex-direction: column;
+      justify-content: flex-start;
+    }
+
+    /* Navbar */
+    .navbar {
+      position: fixed;
+      top: 0;
+      width: 100%;
+      background: rgba(0,0,0,0.95);
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 18px 50px;
+      z-index: 1000;
+      backdrop-filter: blur(8px);
+      border-bottom: 1px solid #222;
+    }
+
+    .navbar a {
+      color: #888;
+      text-decoration: none;
+      margin-left: 24px;
+      font-weight: 700;
+      font-size: 1rem;
+      letter-spacing: 0.06em;
+      transition: color 0.3s ease;
+    }
+
+    .navbar a:hover {
+      color: #eee;
+      text-shadow: 0 0 6px #eeeaaaff;
+    }
+
+    .logo {
+      font-weight: 900;
+      font-size: 1.8rem;
+      color: #111; /* hidden basically */
+      letter-spacing: 3px;
+      user-select: none;
+      cursor: default;
+      user-select:none;
+      height: 24px; /* keep nav spacing */
+    }
+
+    /* Hero */
+    .hero {
+      min-height: 110vh;
+      padding-top: 80px; /* navbar space */
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      flex-direction: column;
+      text-align: center;
+      user-select: none;
+      padding-left: 20px;
+      padding-right: 20px;
+      color: transparent; /* hide real text */
+      border-right: 3px solid #888;
+      white-space: nowrap;
+      overflow: hidden;
+      width: 0;
+      animation: typing 4s steps(14) forwards, blink 0.75s step-end infinite;
+      font-weight: 700;
+      font-size: 2.6rem;
+      letter-spacing: 2px;
+      user-select:none;
+    }
+
+    /* Animated text container */
+    .hero span {
+      color: #bbb;
+      font-weight: 700;
+      font-size: 2.6rem;
+      letter-spacing: 2px;
+      border-right: 3px solid #bbb;
+      white-space: nowrap;
+      overflow: hidden;
+      width: 0;
+      animation: typing 4s steps(14) forwards, blink 0.75s step-end infinite;
+      user-select:none;
+    }
+
+    .hero .btn {
+      margin-top: 45px;
+      padding: 14px 44px;
+      background: #111;
+      color: #bbb;
+      font-weight: 700;
+      font-size: 1.1rem;
+      border: 2px solid #444;
+      border-radius: 10px;
+      cursor: pointer;
+      text-decoration: none;
+      display: inline-block;
+      transition: background 0.35s ease, box-shadow 0.35s ease, color 0.35s ease;
+      user-select: none;
+      box-shadow: none;
+    }
+
+    .hero .btn:hover {
+      background: #333;
+      color: #eee;
+      border-color: #eee;
+      box-shadow: 0 0 8px #eeeaaaff;
+    }
+
+    /* Sections */
+    section {
+      padding: 90px 30px 110px 30px;
+      max-width: 900px;
+      margin: auto;
+    }
+
+    h2 {
+      text-align: center;
+      color: #555;
+      margin-bottom: 65px;
+      font-weight: 700;
+      letter-spacing: 0.12em;
+      font-size: 2.2rem;
+      position: relative;
+      user-select: none;
+    }
+
+    /* Cards */
+    .cards {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 38px;
+      justify-content: center;
+    }
+
+    .card {
+      background: #111;
+      border-radius: 12px;
+      padding: 32px 28px;
+      text-align: center;
+      flex: 1 1 260px;
+      max-width: 320px;
+      transition: transform 0.4s ease, box-shadow 0.4s ease;
+      color: #bbb;
+      user-select: none;
+      box-shadow: 0 0 6px #222 inset;
+    }
+
+    .card:hover {
+      transform: translateY(-8px);
+      box-shadow: 0 0 18px #8888, 0 0 36px #bbbbaa55;
+      background: #222;
+      color: #eee;
+    }
+
+    .card h3 {
+      margin-bottom: 14px;
+      color: #999;
+      font-weight: 700;
+      font-size: 1.4rem;
+      text-shadow: none;
+    }
+
+    .card p {
+      font-size: 1.1rem;
+      line-height: 1.6;
+      color: #ccc;
+    }
+
+    /* About */
+    #about p {
+      max-width: 720px;
+      margin: 0 auto 50px auto;
+      font-size: 1.2rem;
+      color: #777;
+      text-align: center;
+      line-height: 1.7;
+      user-select: none;
+    }
+
+    /* Contact */
+    #contact p {
+      font-size: 1.2rem;
+      text-align: center;
+      margin: 25px 0;
+      user-select: none;
+    }
+
+    #contact a {
+      color: #bbb;
+      text-decoration: none;
+      font-weight: 700;
+      font-size: 1.2rem;
+      transition: color 0.3s ease;
+      user-select: text;
+    }
+
+    #contact a:hover {
+      color: #eee;
+      text-shadow: 0 0 8px #eeeaaaff;
+    }
+
+    /* Footer */
+    footer {
+      background: #111;
+      text-align: center;
+      padding: 36px 20px;
+      color: #444;
+      font-size: 1rem;
+      letter-spacing: 0.12em;
+      user-select: none;
+      margin-top: auto;
+      border-top: 1px solid #222;
+    }
+
+    /* Animations */
+
+    @keyframes typing {
+      from { width: 0 }
+      to { width: 14ch }
+    }
+
+    @keyframes blink {
+      50% { border-color: transparent }
+    }
+
+    /* Responsive */
+
+    @media (max-width: 700px) {
+      .hero span {
+        font-size: 2rem;
+      }
+      .hero .btn {
+        font-size: 1rem;
+        padding: 12px 36px;
+      }
+      h2 {
+        font-size: 1.8rem;
+      }
+      .cards {
+        flex-direction: column;
+        align-items: center;
+      }
+      .card {
+        max-width: 100%;
+      }
+      .navbar {
+        padding: 15px 20px;
+      }
+      .navbar a {
+        font-size: 0.9rem;
+        margin-left: 15px;
+      }
+      .logo {
+        font-size: 1.4rem;
+        letter-spacing: 1.8px;
+        height: 20px;
+      }
+    }
+
+  </style>
+</head>
+<body>
+
+  <nav class="navbar">
+    <a href="#hero" class="logo">EMAXION</a>
+    <div class="nav-links">
+      <a href="#services">Services</a>
+      <a href="#about">About</a>
+      <a href="#contact">Contact</a>
+    </div>
+  </nav>
+
+  <header class="hero" id="hero">
+    <span>EMAXION STUDIOS</span>
+    <a href="tel:+233538441097" class="btn">Call</a>
+  </header>
+
+  <section id="services">
+    <h2>What We Do</h2>
+    <div class="cards">
+      <div class="card">
+        <h3>Software</h3>
+        <p>We build cutting-edge web and mobile applications tailored to your needs, ensuring performance, scalability, and security.</p>
+      </div>
+      <div class="card">
+        <h3>Animation</h3>
+        <p>Creative 2D & 3D animations that bring your stories and ideas to vibrant life with high-quality visuals and smooth motion.</p>
+      </div>
+      <div class="card">
+        <h3>Game Dev</h3>
+        <p>Immersive and engaging games developed using the latest technologies to captivate and entertain your audience worldwide.</p>
+      </div>
+      <div class="card">
+        <h3>Design</h3>
+        <p>Professional logos, UI/UX design, branding, and digital artwork that create memorable and impactful experiences.</p>
+      </div>
+      <div class="card">
+        <h3>Writing</h3>
+        <p>Expert creative, script, technical, and marketing writing services to effectively communicate your vision and ideas.</p>
+      </div>
+    </div>
+  </section>
+
+  <section id="about">
+    <h2>About Us</h2>
+    <p>
+      EMAXION STUDIOS is a forward-thinking creative technology company dedicated to crafting world-class digital experiences.
+      Our talented team blends innovation with passion to deliver exceptional software, animations, games, designs, and writing
+      services that inspire and engage audiences worldwide.
+    </p>
+    <p>
+      We believe in pushing boundaries and transforming ideas into reality through cutting-edge technology and creativity.
+      Whether you’re a startup or an established brand, EMAXION STUDIOS is your trusted partner on the journey to digital excellence.
+    </p>
+    <p>
+      Our mission is to empower businesses and creators by delivering quality, innovative solutions that stand out and make a difference.
+      Join us and let's build something extraordinary together.
+    </p>
+  </section>
+
+  <section id="contact">
+    <h2>Contact Us</h2>
+    <p>Email: <a href="mailto:emaxionstudios@gmail.com">emaxionstudios@gmail.com</a></p>
+    <p>
+      Phone: 
+      <a href="tel:+233538441097">Call</a> | 
+      <a href="https://api.whatsapp.com/send?phone=233538441097" target="_blank" rel="noopener noreferrer">WhatsApp</a>
+    </p>
+  </section>
+
+  <footer>
+    <p>© All rights observed 2021 | Made by Dynamite</p>
+  </footer>
+
+</body>
+</html>
