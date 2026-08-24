@@ -1,0 +1,106 @@
+@import "tailwindcss";
+
+/* ===== ARES design tokens ==================================================
+   Dark is the primary experience; light is a first-class alternative.
+   Color communicates meaning only: bull/bear, warn/danger, online/offline. */
+
+:root {
+  --bg: #f4f6f9;
+  --bg-elev: #ffffff;
+  --bg-inset: #e9edf2;
+  --border: #d7dde5;
+  --border-strong: #b9c2cd;
+  --text: #171d26;
+  --text-dim: #5a6675;
+  --text-faint: #8b95a3;
+  --accent: #0e7490;
+  --accent-soft: #0e749018;
+  --bull: #0d9464;
+  --bear: #dc4646;
+  --warn: #b45309;
+  --danger: #dc2626;
+  --online: #0d9464;
+  --offline: #94a3b8;
+  --chart-grid: #e5e9ef;
+}
+
+.dark {
+  --bg: #0b0e13;
+  --bg-elev: #11151d;
+  --bg-inset: #161b25;
+  --border: #1f2632;
+  --border-strong: #2c3545;
+  --text: #e4e9f0;
+  --text-dim: #97a1b0;
+  --text-faint: #5d6878;
+  --accent: #38bdf8;
+  --accent-soft: #38bdf81a;
+  --bull: #2dd4a0;
+  --bear: #f87171;
+  --warn: #fbbf24;
+  --danger: #ef4444;
+  --online: #2dd4a0;
+  --offline: #64748b;
+  --chart-grid: #161c26;
+}
+
+@theme inline {
+  --color-bg: var(--bg);
+  --color-elev: var(--bg-elev);
+  --color-inset: var(--bg-inset);
+  --color-line: var(--border);
+  --color-line-strong: var(--border-strong);
+  --color-ink: var(--text);
+  --color-dim: var(--text-dim);
+  --color-faint: var(--text-faint);
+  --color-accent: var(--accent);
+  --color-bull: var(--bull);
+  --color-bear: var(--bear);
+  --color-warn: var(--warn);
+  --color-danger: var(--danger);
+  --color-online: var(--online);
+  --color-offline: var(--offline);
+}
+
+html, body, #root { height: 100%; }
+
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: "Inter", ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  font-size: 13.5px;
+  -webkit-font-smoothing: antialiased;
+  overflow: hidden;
+}
+
+.num { font-variant-numeric: tabular-nums; }
+
+::-webkit-scrollbar { width: 8px; height: 8px; }
+::-webkit-scrollbar-thumb { background: var(--border-strong); border-radius: 4px; }
+::-webkit-scrollbar-track { background: transparent; }
+
+.panel {
+  background: var(--bg-elev);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+}
+
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  border: 1px solid var(--border);
+  background: var(--bg-inset);
+  color: var(--text-dim);
+}
+
+@keyframes pulse-dot { 0%,100% { opacity: 1 } 50% { opacity: .35 } }
+.pulse { animation: pulse-dot 2s ease-in-out infinite; }
+
+@keyframes fadeUp { from { opacity: 0; transform: translateY(4px) } to { opacity: 1; transform: none } }
+.fade-up { animation: fadeUp .18s ease-out; }
