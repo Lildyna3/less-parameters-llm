@@ -1,0 +1,135 @@
+"""Market data service.
+
+One service owns the active provider, a tick/candle cache, and a broadcast
+loop that pushes quote updates over the WebSocket hub. It never fabricates
+data: when the provider is unavailable it reports DATA SOURCE OFFLINE and
+returns nothing.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import time
+
+from ..config import MarketDataSettings
+from ..logging_setup import get_logger
+from ..status import ComponentState, status_registry
+from .providers import MarketDataProvider
+
+log = get_logger("market_data")
+
+# Candle cache TTLs per timeframe (seconds) — short enough to stay live,
+# long enough to avoid hammering the provider.
+_CANDLE_TTL = {"M1": 5, "M5": 15, "M15": 30, "M30": 60, "H1": 120, "H4": 300, "D1": 600, "W1": 1800}
+
+
+class MarketDataService:
+    def __init__(self, provider: MarketDataProvider, settings: MarketDataSettings) -> None:
+        self.provider = provider
+        self.settings = settings
+        self.watched_symbols: list[str] = list(settings.default_symbols)
+        self.latest_ticks: dict[str, dict] = {}
+        self._prev_day_close: dict[str, float] = {}
+        self._candle_cache: dict[tuple[str, str, int], tuple[float, list[dict]]] = {}
+        self._symbols_cache: tuple[float, list[dict]] | None = None
+        self._task: asyncio.Task | None = None
+        self.broadcast = None  # async callable injected by main (ws hub)
+
+    # -- status ---------------------------------------------------------------
+
+    async def refresh_status(self) -> None:
+        if await self.provider.available():
+            label = self.provider.source_label
+            reason = "Streaming live MT5 data" if label == "MT5" else \
+                "Simulation mode (explicitly enabled) — prices are SIMULATED, not live"
+            state = ComponentState.ONLINE if label == "MT5" else ComponentState.DEGRADED
+            status_registry.set("market_data", state, reason, {"source": label})
+        else:
+            status_registry.set(
+                "market_data", ComponentState.OFFLINE,
+                "DATA SOURCE OFFLINE — MT5 is not connected and simulation mode is not enabled",
+                {"source": None},
+            )
+
+    # -- lifecycle --------------------------------------------------------------
+
+    async def start(self) -> None:
+        await self.refresh_status()
+        self._task = asyncio.create_task(self._tick_loop(), name="market-data-loop")
+
+    async def stop(self) -> None:
+        if self._task:
+            self._task.cancel()
+            try:
+                await self._task
+            except asyncio.CancelledError:
+                pass
+
+    async def _tick_loop(self) -> None:
+        while True:
+            try:
+                await asyncio.sleep(self.settings.tick_interval_seconds)
+                if not await self.provider.available():
+                    continue
+                updates = []
+                for symbol in self.watched_symbols:
+                    tick = await self.provider.get_tick(symbol)
+                    if tick:
+                        tick.update(self._change_stats(symbol, tick))
+                        self.latest_ticks[symbol] = tick
+                        updates.append(tick)
+                if updates and self.broadcast:
+                    await self.broadcast({"type": "ticks", "data": updates})
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:  # noqa: BLE001
+                log.error("tick loop error: %s", exc)
+
+    def _change_stats(self, symbol: str, tick: dict) -> dict:
+        ref = self._prev_day_close.get(symbol)
+        if ref is None:
+            return {"change": None, "change_percent": None}
+        mid = (tick["bid"] + tick["ask"]) / 2
+        return {
+            "change": round(mid - ref, 6),
+            "change_percent": round((mid - ref) / ref * 100, 3),
+        }
+
+    # -- data access -------------------------------------------------------------
+
+    async def get_symbols(self) -> list[dict]:
+        if self._symbols_cache and time.monotonic() - self._symbols_cache[0] < 300:
+            return self._symbols_cache[1]
+        symbols = await self.provider.get_symbols()
+        if symbols:
+            self._symbols_cache = (time.monotonic(), symbols)
+        return symbols
+
+    async def get_tick(self, symbol: str) -> dict | None:
+        cached = self.latest_ticks.get(symbol)
+        if cached:
+            return cached
+        tick = await self.provider.get_tick(symbol)
+        if tick:
+            tick.update(self._change_stats(symbol, tick))
+            self.latest_ticks[symbol] = tick
+            if symbol not in self.watched_symbols:
+                self.watched_symbols.append(symbol)
+        return tick
+
+    async def get_candles(self, symbol: str, timeframe: str, count: int = 300) -> list[dict]:
+        key = (symbol, timeframe, count)
+        ttl = _CANDLE_TTL.get(timeframe, 60)
+        cached = self._candle_cache.get(key)
+        if cached and time.monotonic() - cached[0] < ttl:
+            return cached[1]
+        candles = await self.provider.get_candles(symbol, timeframe, count)
+        if candles:
+            self._candle_cache[key] = (time.monotonic(), candles)
+            if timeframe == "D1" and len(candles) >= 2:
+                self._prev_day_close[symbol] = candles[-2]["close"]
+        return candles
+
+    @property
+    def source_label(self) -> str:
+        return self.provider.source_label
