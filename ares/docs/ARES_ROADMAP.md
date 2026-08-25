@@ -29,7 +29,7 @@ Build environment: Linux host, Python 3.11.15, Node 22, npm 10.9.7.
 |---|---|---|---|
 | 17 | Executive design system + full UI rebuild | **COMPLETE** | New tokens, nav, Command Center workspace, Risk Command, Analysis, Settings; verified at 1600/834/390 px |
 | 18 | Windows MT5 bridge | **COMPLETE** | Protocol, server, adapter, Windows client, precise states; data path verified end-to-end in an automated test |
-| 19 | Real news engine | **COMPLETE (code)** / **DATA BLOCKED HERE** | RSS/Atom ingestion, classification, impact, interpretation. This sandbox's network policy blocks all news hosts, so the feed is correctly empty here; it populates on any host with normal egress |
+| 19 | Real news engine | **COMPLETE** / **PUBLIC SOURCES BLOCKED HERE** | RSS/Atom ingestion, classification, impact, interpretation, operator-configurable sources. Verified end-to-end against a local feed: 4 articles ingested, classified, filtered and rendered, with the news→analysis route working. This sandbox's network policy blocks the *public* news hosts, so those are correctly reported unreachable |
 | 20 | Responsive + PWA | **COMPLETE** | Per-device layouts, manifest, icons, shell-only service worker |
 | 21 | Production packaging | **COMPLETE** | Single-process serving, Dockerfile, compose, serve.sh, systemd unit, access token |
 | 22 | Deployment to a public URL | **NOT DONE** | Cannot be done from this environment — see below |
@@ -55,7 +55,8 @@ Compose behind Caddy or a Cloudflare Tunnel is the shortest route).
 - **MT5 requires the Windows bridge.** Verified against a protocol-level test
   client, not yet against a live broker terminal — that needs your Windows
   machine and demo credentials.
-- **News needs network egress** to the source hosts; blocked in this sandbox.
+- **News needs network egress** to the public source hosts; blocked in this
+  sandbox (the pipeline itself is verified against a local feed).
 - **Economic calendar has no live feed.** Events are added manually or by a
   future licensed integration; ARES never invents them.
 - **Web research layer** is absent — reported as unavailable rather than faked.

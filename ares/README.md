@@ -103,6 +103,9 @@ interpretation — always in a separate, labelled block.
 If the host cannot reach those sources, the feed is empty and says exactly
 that, per source. ARES never writes a headline.
 
+Add your own feeds with `ARES_NEWS__EXTRA_FEEDS` (JSON), or replace the
+built-in list entirely with `ARES_NEWS__REPLACE_DEFAULT_FEEDS=true`.
+
 ## Safety model
 
 - Paper trading only; there is no live execution path in this build.
@@ -119,7 +122,7 @@ that, per source. ARES never writes a headline.
 ## Testing
 
 ```bash
-cd backend  && .venv/bin/python -m pytest    # 97 tests
+cd backend  && .venv/bin/python -m pytest    # 104 tests
 cd frontend && npm test                      # 19 tests
 cd frontend && npm run build                 # type-check + production build
 ```

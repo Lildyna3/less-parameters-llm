@@ -29,6 +29,9 @@ log = get_logger("news")
 
 USER_AGENT = "ARES/1.0 (+trading-intelligence; RSS reader)"
 
+# Hard ceiling on a single feed response.
+MAX_FEED_BYTES = 4 * 1024 * 1024
+
 # Instrument keyword map. Matching is word-boundary aware and case-insensitive.
 SYMBOL_KEYWORDS: dict[str, tuple[str, ...]] = {
     "EURUSD": ("eurusd", "eur/usd", "euro", "ecb", "eurozone", "euro zone"),
@@ -85,6 +88,32 @@ BEARISH_TERMS = ("falls", "drops", "slides", "weakens", "plunges", "slumps", "de
 
 def _contains(text: str, terms: tuple[str, ...]) -> list[str]:
     return [t for t in terms if t in text]
+
+
+
+def build_sources(settings: NewsSettings) -> tuple[NewsSource, ...]:
+    """Built-in feeds plus any the operator configured. A malformed entry is
+    skipped with a log line rather than taking the whole service down."""
+    configured: list[NewsSource] = []
+    for entry in settings.extra_feeds:
+        try:
+            configured.append(NewsSource(
+                id=str(entry["id"]),
+                name=str(entry.get("name", entry["id"])),
+                url=str(entry["url"]),
+                categories=tuple(str(c).upper() for c in entry.get("categories", ("MARKETS",))),
+                enabled=bool(entry.get("enabled", True)),
+            ))
+        except (KeyError, TypeError) as exc:
+            log.warning("ignoring malformed news feed entry %r: %s", entry, exc)
+
+    if settings.replace_default_feeds:
+        return tuple(configured)
+    # Configured feeds win on id collisions with a built-in.
+    by_id = {source.id: source for source in DEFAULT_SOURCES}
+    for source in configured:
+        by_id[source.id] = source
+    return tuple(by_id.values())
 
 
 @dataclass
@@ -169,7 +198,11 @@ def build_interpretation(title: str, impact: str, direction: str,
                          symbols: list[str], currencies: list[str]) -> tuple[str, str]:
     """ARES's own reading of the headline — explicitly separated from source
     content and phrased as an assessment, not as fact."""
-    subject = currencies[0] if currencies else (symbols[0] if symbols else "the market")
+    # The direction was derived from the headline's own verbs, so the subject
+    # must be what the headline is about. A named instrument wins over a
+    # currency that merely appears in passing: "Gold falls as yields climb"
+    # is bearish XAUUSD, not bearish USD.
+    subject = symbols[0] if symbols else (currencies[0] if currencies else "the market")
     label_direction = direction if direction != "neutral" else "mixed"
     short = f"{impact.capitalize()} {label_direction} {subject}".replace("Low", "Low-impact")
 
@@ -203,7 +236,7 @@ class NewsService:
 
     def __init__(self, settings: NewsSettings, sources: tuple[NewsSource, ...] | None = None) -> None:
         self.settings = settings
-        self.sources = sources if sources is not None else DEFAULT_SOURCES
+        self.sources = sources if sources is not None else build_sources(settings)
         self.articles: list[NewsArticle] = []
         self.source_status: dict[str, SourceStatus] = {
             s.id: SourceStatus(id=s.id, name=s.name) for s in self.sources
@@ -291,17 +324,28 @@ class NewsService:
         status = self.source_status[source.id]
         status.last_attempt = datetime.now(timezone.utc).isoformat(timespec="seconds")
         try:
-            resp = await client.get(source.url)
+            # Streamed with a hard byte cap: a feed is untrusted input, and an
+            # unbounded body could exhaust memory.
+            async with client.stream("GET", source.url) as resp:
+                if resp.status_code != 200:
+                    self._record_failure(source, f"HTTP {resp.status_code}")
+                    return []
+                chunks: list[bytes] = []
+                total = 0
+                async for chunk in resp.aiter_bytes():
+                    total += len(chunk)
+                    if total > MAX_FEED_BYTES:
+                        self._record_failure(
+                            source, f"feed exceeded {MAX_FEED_BYTES // 1024} KiB limit")
+                        return []
+                    chunks.append(chunk)
+            body = b"".join(chunks).decode(resp.encoding or "utf-8", errors="replace")
         except Exception as exc:  # noqa: BLE001 - network reality, reported truthfully
             self._record_failure(source, f"unreachable: {type(exc).__name__}")
             return []
 
-        if resp.status_code != 200:
-            self._record_failure(source, f"HTTP {resp.status_code}")
-            return []
-
         try:
-            raw_articles = parse_feed(resp.text)
+            raw_articles = parse_feed(body)
         except Exception as exc:  # noqa: BLE001
             self._record_failure(source, f"unparseable feed: {type(exc).__name__}")
             return []

@@ -76,6 +76,24 @@ def clean_text(raw: str | None, limit: int = 400) -> str:
     return text
 
 
+# Feed-supplied URLs are untrusted input that ends up in an anchor href, so only
+# real web schemes are ever accepted. A "javascript:" or "data:" link from a
+# hostile or compromised feed would otherwise run in the ARES origin.
+_SAFE_URL_SCHEMES = ("http://", "https://")
+
+
+def safe_link(raw: str | None) -> str | None:
+    if not raw:
+        return None
+    candidate = html.unescape(raw.strip())
+    # Strip control characters and whitespace that browsers ignore but which can
+    # disguise a scheme (e.g. "java\tscript:").
+    candidate = "".join(ch for ch in candidate if ch.isprintable() and not ch.isspace())
+    if not candidate.lower().startswith(_SAFE_URL_SCHEMES):
+        return None
+    return candidate
+
+
 def parse_datetime(raw: str | None) -> datetime | None:
     if not raw:
         return None
@@ -121,14 +139,11 @@ def _find_link(item: ElementTree.Element) -> str | None:
         # Atom puts the URL in href; RSS in the element text.
         href = child.attrib.get("href")
         rel = child.attrib.get("rel", "alternate")
-        if href and rel == "alternate":
-            return href
-        if (child.text or "").strip():
-            return child.text.strip()
-    guid = _find_text(item, ("guid", "id"))
-    if guid and guid.strip().startswith("http"):
-        return guid.strip()
-    return None
+        if href and rel == "alternate" and (safe := safe_link(href)):
+            return safe
+        if safe := safe_link(child.text):
+            return safe
+    return safe_link(_find_text(item, ("guid", "id")))
 
 
 @dataclass

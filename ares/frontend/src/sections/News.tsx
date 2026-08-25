@@ -12,6 +12,19 @@ import { Empty, Impact, PanelHeader, Tag, Unavailable, ago, clock } from "../com
    the feed. ARES's own read is always in its own labelled block — never mixed
    into the source text, and never invented when there is no story. */
 
+/** Feed URLs are untrusted. The backend already rejects anything that is not
+    http(s), but the check is repeated here so a link can never execute script
+    in the ARES origin even if that layer is bypassed or changed. */
+function safeHref(url: string | null): string | null {
+  if (!url) return null;
+  try {
+    const parsed = new URL(url, window.location.origin);
+    return parsed.protocol === "http:" || parsed.protocol === "https:" ? parsed.toString() : null;
+  } catch {
+    return null;
+  }
+}
+
 function ImpactAccent({ level }: { level: string }) {
   const tone =
     level === "CRITICAL" ? "bg-danger" : level === "HIGH" ? "bg-warn" :
@@ -107,9 +120,9 @@ function ArticleDetail({ id, onClose }: { id: string; onClose: () => void }) {
           <p className="mt-4 text-[13px] leading-[1.7] text-dim">{article.summary}</p>
         )}
 
-        {article.url && (
+        {safeHref(article.url) && (
           <a
-            href={article.url}
+            href={safeHref(article.url)!}
             target="_blank"
             rel="noopener noreferrer"
             className="mt-3 inline-block text-[11.5px] text-accent hover:underline"

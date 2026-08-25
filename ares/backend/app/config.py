@@ -93,6 +93,11 @@ class NewsSettings(BaseModel):
     refresh_interval_seconds: int = 300
     fetch_timeout_seconds: float = 12.0
     max_articles: int = 300
+    # Operator-supplied feeds, as JSON:
+    #   [{"id":"x","name":"X","url":"https://…","categories":["FOREX"]}]
+    # Added to the built-in list, or used alone when replace_default_feeds is on.
+    extra_feeds: list[dict] = Field(default_factory=list)
+    replace_default_feeds: bool = False
 
 
 class BridgeSettings(BaseModel):

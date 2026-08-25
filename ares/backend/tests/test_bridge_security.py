@@ -231,3 +231,37 @@ def test_websocket_requires_token(secured_client):
             ws.receive_text()
     with secured_client.websocket_connect("/ws?access_token=s3cret-access") as ws:
         ws.send_text("ping")  # accepted
+
+
+# -- static file serving ------------------------------------------------------
+
+def test_spa_route_refuses_path_traversal(tmp_path):
+    """The SPA catch-all serves files by user-supplied path, so it must never
+    escape the build directory."""
+    dist = tmp_path / "dist"
+    dist.mkdir()
+    (dist / "index.html").write_text("<!doctype html><title>ARES</title>")
+    (dist / "manifest.webmanifest").write_text('{"name":"ARES"}')
+    secret = tmp_path / "secret.txt"
+    secret.write_text("TOP-SECRET-TOKEN")
+
+    config = AresConfig(environment="test")
+    config.market_data = MarketDataSettings(mode="simulation", tick_interval_seconds=0.05)
+    config.system.database_url = f"sqlite+aiosqlite:///{tmp_path}/spa.db"
+    config.news.news_feed_enabled = False
+    config.system.serve_frontend = True
+    config.system.frontend_dist = str(dist)
+
+    with TestClient(create_app(config)) as client:
+        # Real files inside dist are served as themselves.
+        assert client.get("/manifest.webmanifest").json() == {"name": "ARES"}
+
+        for attempt in ("/../secret.txt", "/../../secret.txt",
+                        "/..%2f..%2fsecret.txt", "/%2e%2e%2fsecret.txt"):
+            response = client.get(attempt)
+            assert response.status_code == 200
+            assert "TOP-SECRET-TOKEN" not in response.text, attempt
+            assert "ARES" in response.text  # fell back to the SPA shell
+
+        # Unknown routes are the SPA, so client-side deep links work.
+        assert "ARES" in client.get("/news").text

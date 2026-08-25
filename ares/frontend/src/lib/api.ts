@@ -21,6 +21,11 @@ export function setToken(token: string | null): void {
   } catch { /* private mode: the session just won't persist */ }
 }
 
+/** The resolved API origin: same-origin in production, the dev backend during
+    `vite dev`. Exported so callers can reach the real API rather than the dev
+    server when they need a raw fetch. */
+export const apiUrl = (path: string): string => `${BASE}${path}`;
+
 export class ApiError extends Error {
   status: number;
   constructor(status: number, message: string) {

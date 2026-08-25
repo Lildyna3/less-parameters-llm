@@ -85,6 +85,7 @@ exposed to the frontend.
 | `ARES_AI__PROVIDER` / `ARES_AI__API_KEY` | optional narration provider |
 | `ARES_MARKET_DATA__MODE` | `mt5` (default) or `simulation` |
 | `ARES_NEWS__NEWS_FEED_ENABLED` | turn the RSS news engine on/off |
+| `ARES_NEWS__EXTRA_FEEDS` | JSON list of your own feeds; `ARES_NEWS__REPLACE_DEFAULT_FEEDS=true` uses only those |
 | `ARES_SYSTEM__DATABASE_URL` | SQLite by default; PostgreSQL-ready |
 | `ARES_RISK__*` | risk limits (also editable in Settings) |
 

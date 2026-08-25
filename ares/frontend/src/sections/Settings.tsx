@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { api, getToken, setToken } from "../lib/api";
+import { api, apiUrl, getToken, setToken } from "../lib/api";
 import { useAres } from "../store";
 import { requestNotificationPermission } from "../lib/ws";
 import type { BridgeStatus, RiskSnapshot, StatusMap } from "../lib/types";
@@ -201,8 +201,9 @@ function Security() {
   const [protectedApi, setProtectedApi] = useState<boolean | null>(null);
 
   useEffect(() => {
-    // Probe without a token to learn whether the server enforces one.
-    void fetch("/api/status")
+    // Probe the real API (not the dev server) without a token, to learn
+    // whether this deployment actually enforces one.
+    void fetch(apiUrl("/api/status"))
       .then((response) => setProtectedApi(response.status === 401))
       .catch(() => setProtectedApi(null));
   }, []);
