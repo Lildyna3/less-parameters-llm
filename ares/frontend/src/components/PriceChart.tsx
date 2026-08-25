@@ -10,21 +10,40 @@ import type { Analysis, Candle, Position } from "../lib/types";
 
 const TIMEFRAMES = ["M1", "M5", "M15", "M30", "H1", "H4", "D1", "W1"];
 
-function chartColors(dark: boolean) {
+/** Chart chrome is read from the design tokens so it re-themes with the app
+    and never needs the chart to be rebuilt. */
+function chartColors() {
   const css = getComputedStyle(document.documentElement);
+  const token = (name: string, fallback: string) =>
+    css.getPropertyValue(name).trim() || fallback;
+  const line = token("--line", "rgba(255,255,255,0.07)");
   return {
     layout: {
       background: { color: "transparent" },
-      textColor: css.getPropertyValue("--text-dim").trim() || (dark ? "#97a1b0" : "#5a6675"),
+      textColor: token("--faint", "#6b6862"),
       attributionLogo: false,
+      fontFamily: token("--font-mono", "monospace"),
     },
     grid: {
-      vertLines: { color: css.getPropertyValue("--chart-grid").trim() },
-      horzLines: { color: css.getPropertyValue("--chart-grid").trim() },
+      vertLines: { color: token("--grid", "rgba(255,255,255,0.035)") },
+      horzLines: { color: token("--grid", "rgba(255,255,255,0.035)") },
     },
-    crosshair: { mode: 0 },
-    timeScale: { timeVisible: true, borderColor: css.getPropertyValue("--border").trim() },
-    rightPriceScale: { borderColor: css.getPropertyValue("--border").trim() },
+    crosshair: {
+      mode: 0,
+      vertLine: { color: token("--line-strong", line), labelBackgroundColor: token("--s3", "#1e1e23") },
+      horzLine: { color: token("--line-strong", line), labelBackgroundColor: token("--s3", "#1e1e23") },
+    },
+    timeScale: { timeVisible: true, borderColor: line },
+    rightPriceScale: { borderColor: line },
+  };
+}
+
+function seriesColors() {
+  const css = getComputedStyle(document.documentElement);
+  return {
+    bull: css.getPropertyValue("--bull").trim() || "#55a37d",
+    bear: css.getPropertyValue("--bear").trim() || "#c4635c",
+    accent: css.getPropertyValue("--accent").trim() || "#c9a961",
   };
 }
 
@@ -46,15 +65,16 @@ export default function PriceChart({ height }: { height?: number }) {
   useEffect(() => {
     const el = containerRef.current;
     if (!el || chartRef.current) return;
-    const chart = createChart(el, { ...chartColors(theme === "dark"), autoSize: true });
+    const palette = seriesColors();
+    const chart = createChart(el, { ...chartColors(), autoSize: true });
     const series = chart.addSeries(CandlestickSeries, {
-      upColor: "#2dd4a0", downColor: "#f87171",
-      wickUpColor: "#2dd4a0", wickDownColor: "#f87171",
+      upColor: palette.bull, downColor: palette.bear,
+      wickUpColor: palette.bull, wickDownColor: palette.bear,
       borderVisible: false,
     });
     const volume = chart.addSeries(HistogramSeries, {
       priceFormat: { type: "volume" }, priceScaleId: "vol",
-      color: "rgba(120,130,150,0.35)",
+      color: "rgba(140,140,140,0.22)",
     });
     chart.priceScale("vol").applyOptions({ scaleMargins: { top: 0.82, bottom: 0 } });
     chartRef.current = chart;
@@ -71,9 +91,14 @@ export default function PriceChart({ height }: { height?: number }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Re-theme without recreating.
+  // Re-theme in place — the chart instance is never rebuilt.
   useEffect(() => {
-    chartRef.current?.applyOptions(chartColors(theme === "dark"));
+    chartRef.current?.applyOptions(chartColors());
+    const palette = seriesColors();
+    seriesRef.current?.applyOptions({
+      upColor: palette.bull, downColor: palette.bear,
+      wickUpColor: palette.bull, wickDownColor: palette.bear,
+    });
   }, [theme]);
 
   // Load candles when symbol/timeframe changes.
@@ -186,21 +211,24 @@ export default function PriceChart({ height }: { height?: number }) {
 
   return (
     <div className="flex h-full min-h-0 flex-col">
-      <div className="flex items-center gap-1 border-b border-line px-2 py-1.5">
-        {TIMEFRAMES.map((tf) => (
-          <button
-            key={tf}
-            onClick={() => setTimeframe(tf)}
-            className={`rounded-md px-2 py-0.5 text-[11px] font-semibold num ${
-              tf === timeframe ? "bg-accent/15 text-accent" : "text-faint hover:text-dim"
-            }`}
-          >
-            {tf}
-          </button>
-        ))}
-        <span className="ml-auto flex items-center gap-2 pr-1">
-          {source === "SIMULATED" && <span className="chip !text-warn">SIMULATED</span>}
-          {source === "MT5" && <span className="chip !text-online">MT5 LIVE</span>}
+      <div className="flex items-center gap-2 border-b border-line px-2 py-1.5">
+        {/* The timeframe row scrolls rather than clipping on a narrow phone. */}
+        <div className="scroll-x flex min-w-0 flex-1 items-center gap-0.5">
+          {TIMEFRAMES.map((tf) => (
+            <button
+              key={tf}
+              onClick={() => setTimeframe(tf)}
+              className={`num shrink-0 rounded-md px-2 py-0.5 text-[11px] font-semibold ${
+                tf === timeframe ? "bg-[var(--accent-dim)] text-accent" : "text-faint hover:text-dim"
+              }`}
+            >
+              {tf}
+            </button>
+          ))}
+        </div>
+        <span className="flex shrink-0 items-center gap-2 pr-1">
+          {source === "SIMULATED" && <span className="tag !text-warn">SIMULATED</span>}
+          {source === "MT5" && <span className="tag !text-online">MT5 LIVE</span>}
         </span>
       </div>
       <div className="relative min-h-0 flex-1" style={height ? { height } : undefined}>

@@ -1,13 +1,43 @@
 <!doctype html>
-<html lang="en">
+<html lang="en" class="">
   <head>
     <meta charset="UTF-8" />
-    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>ARES — AI Trading Command Center</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <title>ARES</title>
+    <meta name="description" content="ARES — private executive trading command center." />
+
+    <!-- PWA -->
+    <link rel="manifest" href="/manifest.webmanifest" />
+    <meta name="theme-color" content="#0a0a0b" />
+    <link rel="icon" type="image/png" href="/favicon.png" />
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="apple-mobile-web-app-title" content="ARES" />
+    <meta name="mobile-web-app-capable" content="yes" />
+
+    <style>
+      /* Paint the terminal's ground before the bundle parses, so launching
+         from the home screen never flashes white. */
+      html, body { margin: 0; height: 100%; background: #0a0a0b; }
+      html.light, html.light body { background: #f7f6f3; }
+      #boot {
+        position: fixed; inset: 0; display: grid; place-items: center;
+        font: 400 20px/1 "Iowan Old Style", Palatino, Georgia, serif;
+        letter-spacing: 0.24em; color: #c9a961;
+      }
+    </style>
+    <script>
+      // Apply the stored theme before first paint to avoid a flash.
+      try {
+        if (localStorage.getItem("ares.theme") === "light") {
+          document.documentElement.classList.add("light");
+        }
+      } catch (e) { /* private mode */ }
+    </script>
   </head>
   <body>
-    <div id="root"></div>
+    <div id="root"><div id="boot">ARES</div></div>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>

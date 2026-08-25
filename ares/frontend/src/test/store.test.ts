@@ -26,11 +26,12 @@ describe("ARES store", () => {
   });
 
   it("persists theme, symbol, and timeframe choices", () => {
+    // Dark is the base palette; light is an explicit override class.
     useAres.getState().setTheme("light");
     expect(localStorage.getItem("ares.theme")).toBe("light");
-    expect(document.documentElement.classList.contains("dark")).toBe(false);
+    expect(document.documentElement.classList.contains("light")).toBe(true);
     useAres.getState().setTheme("dark");
-    expect(document.documentElement.classList.contains("dark")).toBe(true);
+    expect(document.documentElement.classList.contains("light")).toBe(false);
 
     useAres.getState().setSymbol("GBPJPY");
     expect(localStorage.getItem("ares.symbol")).toBe("GBPJPY");
@@ -50,12 +51,12 @@ describe("ARES store", () => {
     useAres.getState().applyActions([
       { type: "set_symbol", symbol: "XAUUSD" },
       { type: "set_timeframe", timeframe: "H4" },
-      { type: "open_section", section: "scanner" },
+      { type: "open_section", section: "scanner" }, // scanner now lives in Analysis
     ]);
     const state = useAres.getState();
     expect(state.symbol).toBe("XAUUSD");
     expect(state.timeframe).toBe("H4");
-    expect(state.section).toBe("scanner");
+    expect(state.section).toBe("analysis");
   });
 
   it("sendCommand records user + ARES messages and applies actions", async () => {
@@ -88,5 +89,27 @@ describe("ARES store", () => {
     const alerts = useAres.getState().alerts;
     expect(alerts).toHaveLength(100);
     expect(alerts[0].id).toBe(119); // newest first
+  });
+});
+
+describe("news → market connection", () => {
+  it("openArticle selects the story and moves to the news section", () => {
+    useAres.getState().openArticle("abc123");
+    expect(useAres.getState().selectedArticle).toBe("abc123");
+    expect(useAres.getState().section).toBe("news");
+  });
+
+  it("analyzeSymbol switches instrument and opens the analysis workspace", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({
+      ok: true, status: 200, statusText: "OK",
+      json: () => Promise.resolve({ reply: "XAUUSD is leaning bullish." }),
+    }));
+    await useAres.getState().analyzeSymbol("XAUUSD");
+    const state = useAres.getState();
+    expect(state.symbol).toBe("XAUUSD");
+    expect(state.section).toBe("analysis");
+    expect(state.selectedArticle).toBeNull();
+    expect(state.chat.at(-1)?.text).toContain("bullish");
+    vi.unstubAllGlobals();
   });
 });

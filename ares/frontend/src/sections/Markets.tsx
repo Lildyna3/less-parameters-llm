@@ -2,12 +2,28 @@ import { useEffect, useMemo, useState } from "react";
 import { api } from "../lib/api";
 import { useAres } from "../store";
 import type { SymbolInfo } from "../lib/types";
-import { Empty, PanelTitle } from "../components/ui";
+import { PanelHeader, Unavailable, price } from "../components/kit";
+
+/* Markets: one clean instrument table with search, favourites, asset-class
+   filters and sorting. On a phone the same data becomes a compact list of
+   rows rather than a squeezed table. */
+
+type SortKey = "symbol" | "change" | "spread";
+
+const CLASSES: { id: string; label: string; test: (symbol: string) => boolean }[] = [
+  { id: "ALL", label: "All", test: () => true },
+  { id: "FX", label: "Forex", test: (s) => /^[A-Z]{6}$/.test(s) && !s.startsWith("XA") },
+  { id: "METALS", label: "Metals", test: (s) => s.startsWith("XAU") || s.startsWith("XAG") },
+  { id: "INDICES", label: "Indices", test: (s) => /^(US|DE|UK|JP|EU)\d|^(SPX|NAS|DJI)/.test(s) },
+  { id: "CRYPTO", label: "Crypto", test: (s) => /(BTC|ETH|XRP|SOL|LTC|DOGE)/.test(s) },
+];
 
 export default function Markets() {
   const { ticks, favorites, toggleFavorite, setSymbol, setSection, symbol } = useAres();
   const [query, setQuery] = useState("");
+  const [assetClass, setAssetClass] = useState("ALL");
   const [favOnly, setFavOnly] = useState(false);
+  const [sort, setSort] = useState<SortKey>("symbol");
   const [allSymbols, setAllSymbols] = useState<SymbolInfo[]>([]);
   const [watched, setWatched] = useState<string[]>([]);
   const [busySymbol, setBusySymbol] = useState<string | null>(null);
@@ -20,136 +36,228 @@ export default function Markets() {
   }, []);
 
   const rows = useMemo(() => {
-    let list = Object.values(ticks);
+    const filter = CLASSES.find((c) => c.id === assetClass) ?? CLASSES[0];
+    let list = Object.values(ticks).filter((t) => filter.test(t.symbol));
     if (query) list = list.filter((t) => t.symbol.includes(query.toUpperCase()));
     if (favOnly) list = list.filter((t) => favorites.includes(t.symbol));
-    return list.sort((a, b) => {
-      const fa = favorites.includes(a.symbol) ? 0 : 1;
-      const fb = favorites.includes(b.symbol) ? 0 : 1;
-      return fa - fb || a.symbol.localeCompare(b.symbol);
+    return [...list].sort((a, b) => {
+      if (sort === "change") return Math.abs(b.change_percent ?? 0) - Math.abs(a.change_percent ?? 0);
+      if (sort === "spread") return (a.spread_points ?? 1e9) - (b.spread_points ?? 1e9);
+      const favA = favorites.includes(a.symbol) ? 0 : 1;
+      const favB = favorites.includes(b.symbol) ? 0 : 1;
+      return favA - favB || a.symbol.localeCompare(b.symbol);
     });
-  }, [ticks, query, favOnly, favorites]);
+  }, [ticks, query, favOnly, favorites, sort, assetClass]);
 
-  // Provider symbols matching the search that are not yet on the watchlist.
   const addable = useMemo(() => {
-    if (!query || query.length < 2) return [];
-    const q = query.toUpperCase();
-    const watchedSet = new Set([...watched, ...Object.keys(ticks)]);
+    if (query.length < 2) return [];
+    const needle = query.toUpperCase();
+    const known = new Set([...watched, ...Object.keys(ticks)]);
     return allSymbols
-      .filter((s) => s.name.toUpperCase().includes(q) && !watchedSet.has(s.name.toUpperCase()))
+      .filter((s) => s.name.toUpperCase().includes(needle) && !known.has(s.name.toUpperCase()))
       .slice(0, 8);
   }, [query, allSymbols, watched, ticks]);
 
-  const addToWatchlist = async (name: string) => {
+  const add = async (name: string) => {
     setBusySymbol(name);
     try {
-      const resp = await api.post<{ symbols: string[] }>(`/api/watchlist/${name}`);
-      setWatched(resp.symbols);
-    } catch { /* symbol rejected by data source; row stays addable */ }
+      setWatched((await api.post<{ symbols: string[] }>(`/api/watchlist/${name}`)).symbols);
+    } catch { /* the data source rejected it; row stays addable */ }
     setBusySymbol(null);
   };
 
-  const removeFromWatchlist = async (name: string) => {
+  const remove = async (name: string) => {
     try {
-      const resp = await api.del<{ symbols: string[] }>(`/api/watchlist/${name}`);
-      setWatched(resp.symbols);
-      useAres.setState((s) => {
-        const next = { ...s.ticks };
+      setWatched((await api.del<{ symbols: string[] }>(`/api/watchlist/${name}`)).symbols);
+      useAres.setState((state) => {
+        const next = { ...state.ticks };
         delete next[name];
         return { ticks: next };
       });
     } catch { /* already gone */ }
   };
 
+  const open = (name: string) => { setSymbol(name); setSection("chart"); };
+
   return (
-    <div className="h-full overflow-y-auto p-3">
-      <div className="panel mx-auto max-w-4xl">
-        <PanelTitle right={
-          <div className="flex items-center gap-2">
-            <button onClick={() => setFavOnly(!favOnly)}
-              className={`chip ${favOnly ? "!text-warn" : ""}`}>★ favorites</button>
+    <div className="scroll-y h-full">
+      <div className="mx-auto max-w-[1100px] p-4">
+        <section className="panel">
+          <PanelHeader
+            right={
+              <>
+                <button
+                  onClick={() => setFavOnly((v) => !v)}
+                  className={`tag ${favOnly ? "!border-[var(--accent-line)] !text-accent" : ""}`}
+                >
+                  Favourites
+                </button>
+                <select
+                  value={sort}
+                  onChange={(event) => setSort(event.target.value as SortKey)}
+                  className="field !h-7 !w-auto !text-[11px]"
+                  aria-label="Sort instruments"
+                >
+                  <option value="symbol">Sort: name</option>
+                  <option value="change">Sort: move</option>
+                  <option value="spread">Sort: spread</option>
+                </select>
+              </>
+            }
+          >
+            Markets
+          </PanelHeader>
+
+          <div className="flex flex-col gap-2 border-b border-line px-3 py-2.5 sm:flex-row sm:items-center">
             <input
               value={query}
-              onChange={(e) => setQuery(e.target.value)}
-              placeholder="Search symbols…"
-              className="w-40 rounded-md border border-line bg-inset px-2 py-1 text-[11.5px] outline-none focus:border-accent/60"
+              onChange={(event) => setQuery(event.target.value)}
+              placeholder="Search instruments…"
+              className="field sm:max-w-[220px]"
             />
-          </div>
-        }>
-          Market Watch
-        </PanelTitle>
-
-        {addable.length > 0 && (
-          <div className="border-b border-line px-3.5 py-2">
-            <div className="mb-1 text-[10.5px] font-semibold uppercase tracking-wider text-faint">
-              Available from the data source — add to watchlist
-            </div>
-            <div className="flex flex-wrap gap-1.5">
-              {addable.map((s) => (
-                <button key={s.name} disabled={busySymbol === s.name}
-                  onClick={() => void addToWatchlist(s.name)}
-                  title={s.description}
-                  className="chip hover:!text-accent disabled:opacity-40">
-                  + {s.name}
+            <div className="scroll-x flex gap-1.5">
+              {CLASSES.map((item) => (
+                <button
+                  key={item.id}
+                  onClick={() => setAssetClass(item.id)}
+                  className={`tag shrink-0 ${
+                    assetClass === item.id ? "!border-[var(--accent-line)] !bg-[var(--accent-dim)] !text-accent" : ""
+                  }`}
+                >
+                  {item.label}
                 </button>
               ))}
             </div>
           </div>
-        )}
 
-        {rows.length === 0 ? (
-          <Empty>
-            {Object.keys(ticks).length === 0
-              ? "DATA SOURCE OFFLINE — no live quotes are streaming."
-              : "No symbols match."}
-          </Empty>
-        ) : (
-          <div className="overflow-x-auto">
-            <table className="w-full text-[12px]">
-              <thead>
-                <tr className="border-b border-line text-left text-[10.5px] uppercase tracking-wider text-faint">
-                  <th className="px-3.5 py-2">Symbol</th>
-                  <th className="px-2 py-2 text-right">Bid</th>
-                  <th className="px-2 py-2 text-right">Ask</th>
-                  <th className="px-2 py-2 text-right">Spread</th>
-                  <th className="px-2 py-2 text-right">Δ%</th>
-                  <th className="px-2 py-2">Source</th>
-                  <th className="px-2 py-2" />
-                </tr>
-              </thead>
-              <tbody>
-                {rows.map((t) => (
-                  <tr key={t.symbol}
-                    className={`cursor-pointer border-b border-line/50 last:border-0 hover:bg-inset/70 ${t.symbol === symbol ? "bg-accent/6" : ""}`}
-                    onClick={() => { setSymbol(t.symbol); setSection("chart"); }}>
-                    <td className="px-3.5 py-2 font-semibold num">
-                      <button onClick={(e) => { e.stopPropagation(); toggleFavorite(t.symbol); }}
-                        className={`mr-2 ${favorites.includes(t.symbol) ? "text-warn" : "text-faint"}`}>★</button>
-                      {t.symbol}
-                    </td>
-                    <td className="px-2 py-2 text-right num">{t.bid}</td>
-                    <td className="px-2 py-2 text-right num text-dim">{t.ask}</td>
-                    <td className="px-2 py-2 text-right num text-faint">{t.spread_points ?? "—"}</td>
-                    <td className={`px-2 py-2 text-right num font-semibold ${
-                      (t.change_percent ?? 0) > 0 ? "text-bull" : (t.change_percent ?? 0) < 0 ? "text-bear" : "text-faint"}`}>
-                      {t.change_percent != null ? `${t.change_percent > 0 ? "+" : ""}${t.change_percent}%` : "—"}
-                    </td>
-                    <td className="px-2 py-2">
-                      <span className={`chip ${t.source === "SIMULATED" ? "!text-warn" : "!text-online"}`}>{t.source}</span>
-                    </td>
-                    <td className="px-2 py-2 text-right">
-                      <span className="text-[10.5px] text-faint">open →</span>
-                      <button
-                        onClick={(e) => { e.stopPropagation(); void removeFromWatchlist(t.symbol); }}
-                        title="Remove from watchlist"
-                        className="ml-2 text-[10.5px] text-faint hover:text-bear">✕</button>
-                    </td>
-                  </tr>
+          {addable.length > 0 && (
+            <div className="border-b border-line px-4 py-2.5">
+              <div className="label">Available from the data source</div>
+              <div className="mt-2 flex flex-wrap gap-1.5">
+                {addable.map((item) => (
+                  <button
+                    key={item.name}
+                    disabled={busySymbol === item.name}
+                    onClick={() => void add(item.name)}
+                    title={item.description}
+                    className="tag hover:!text-accent disabled:opacity-40"
+                  >
+                    + {item.name}
+                  </button>
                 ))}
-              </tbody>
-            </table>
-          </div>
-        )}
+              </div>
+            </div>
+          )}
+
+          {rows.length === 0 ? (
+            <Unavailable
+              what={Object.keys(ticks).length === 0 ? "Market data" : "Instruments"}
+              reason={
+                Object.keys(ticks).length === 0
+                  ? "No quotes are streaming. Connect the MT5 bridge, or enable the simulated feed for testing."
+                  : "No instrument matches this filter."
+              }
+            />
+          ) : (
+            <>
+              {/* Desktop table */}
+              <div className="scroll-x hidden sm:block">
+                <table className="table">
+                  <thead>
+                    <tr>
+                      <th>Instrument</th>
+                      <th className="text-right">Bid</th>
+                      <th className="text-right">Ask</th>
+                      <th className="text-right">Spread</th>
+                      <th className="text-right">Change</th>
+                      <th>Source</th>
+                      <th />
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {rows.map((row) => (
+                      <tr
+                        key={row.symbol}
+                        className={`selectable ${row.symbol === symbol ? "is-active" : ""}`}
+                        onClick={() => open(row.symbol)}
+                      >
+                        <td>
+                          <span className="flex items-center gap-2">
+                            <button
+                              onClick={(event) => { event.stopPropagation(); toggleFavorite(row.symbol); }}
+                              className={favorites.includes(row.symbol) ? "text-accent" : "text-faint hover:text-dim"}
+                              aria-label="Toggle favourite"
+                            >
+                              ★
+                            </button>
+                            <span className="num font-semibold">{row.symbol}</span>
+                          </span>
+                        </td>
+                        <td className="num text-right">{row.bid}</td>
+                        <td className="num text-right text-dim">{row.ask}</td>
+                        <td className="num text-right text-faint">{row.spread_points ?? "—"}</td>
+                        <td className={`num text-right ${
+                          (row.change_percent ?? 0) > 0 ? "text-bull" :
+                          (row.change_percent ?? 0) < 0 ? "text-bear" : "text-faint"}`}>
+                          {row.change_percent != null
+                            ? `${row.change_percent > 0 ? "+" : ""}${row.change_percent}%` : "—"}
+                        </td>
+                        <td>
+                          <span className={`tag ${row.source === "SIMULATED" ? "!text-warn" : "!text-online"}`}>
+                            {row.source}
+                          </span>
+                        </td>
+                        <td className="text-right">
+                          <button
+                            onClick={(event) => { event.stopPropagation(); void remove(row.symbol); }}
+                            className="text-[11px] text-faint hover:text-bear"
+                            aria-label="Remove from watchlist"
+                          >
+                            ✕
+                          </button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+
+              {/* Phone list: same data, laid out for a thumb. */}
+              <div className="divide-hair sm:hidden">
+                {rows.map((row) => (
+                  <button
+                    key={row.symbol}
+                    onClick={() => open(row.symbol)}
+                    className="flex w-full items-center gap-3 px-4 py-3 text-left"
+                  >
+                    <button
+                      onClick={(event) => { event.stopPropagation(); toggleFavorite(row.symbol); }}
+                      className={favorites.includes(row.symbol) ? "text-accent" : "text-faint"}
+                      aria-label="Toggle favourite"
+                    >
+                      ★
+                    </button>
+                    <span className="min-w-0 flex-1">
+                      <span className="num block text-[13px] font-semibold">{row.symbol}</span>
+                      <span className="text-[10.5px] text-faint">
+                        spread {row.spread_points ?? "—"} · {row.source}
+                      </span>
+                    </span>
+                    <span className="text-right">
+                      <span className="num block text-[13.5px]">{price(row.bid)}</span>
+                      <span className={`num text-[11px] ${
+                        (row.change_percent ?? 0) > 0 ? "text-bull" :
+                        (row.change_percent ?? 0) < 0 ? "text-bear" : "text-faint"}`}>
+                        {row.change_percent != null
+                          ? `${row.change_percent > 0 ? "+" : ""}${row.change_percent}%` : "—"}
+                      </span>
+                    </span>
+                  </button>
+                ))}
+              </div>
+            </>
+          )}
+        </section>
       </div>
     </div>
   );

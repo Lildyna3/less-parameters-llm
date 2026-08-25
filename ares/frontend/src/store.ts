@@ -21,6 +21,8 @@ interface AresState {
   favorites: string[];
   wsConnected: boolean;
   commandBusy: boolean;
+  selectedArticle: string | null;
+  newsCategory: string;
 
   setTheme: (t: "dark" | "light") => void;
   setSection: (s: Section) => void;
@@ -31,6 +33,9 @@ interface AresState {
   setAccount: (a: AccountSnapshot) => void;
   setWsConnected: (b: boolean) => void;
   toggleFavorite: (s: string) => void;
+  openArticle: (id: string | null) => void;
+  setNewsCategory: (category: string) => void;
+  analyzeSymbol: (symbol: string) => Promise<void>;
   refreshStatus: () => Promise<void>;
   refreshTakeover: () => Promise<void>;
   sendCommand: (message: string) => Promise<void>;
@@ -65,10 +70,13 @@ export const useAres = create<AresState>((set, get) => ({
   favorites: storedFavs,
   wsConnected: false,
   commandBusy: false,
+  selectedArticle: null,
+  newsCategory: "ALL",
 
   setTheme: (theme) => {
     localStorage.setItem("ares.theme", theme);
-    document.documentElement.classList.toggle("dark", theme === "dark");
+    // Dark is the base palette on :root; light is an explicit override class.
+    document.documentElement.classList.toggle("light", theme === "light");
     set({ theme });
   },
   setSection: (section) => set({ section }),
@@ -99,6 +107,17 @@ export const useAres = create<AresState>((set, get) => ({
       return { favorites };
     }),
 
+  openArticle: (id) => set({ selectedArticle: id, section: "news" }),
+  setNewsCategory: (newsCategory) => set({ newsCategory, selectedArticle: null }),
+
+  /** News → market connection: jump from a story straight into the
+      instrument's analysis workspace. */
+  analyzeSymbol: async (symbol) => {
+    get().setSymbol(symbol);
+    set({ section: "analysis", selectedArticle: null });
+    await get().sendCommand(`Analyze ${symbol}`);
+  },
+
   refreshStatus: async () => {
     try {
       const data = await api.get<{ components: StatusMap; overall: string }>("/api/status");
@@ -121,9 +140,12 @@ export const useAres = create<AresState>((set, get) => ({
       if (a.type === "set_symbol" && a.symbol) get().setSymbol(a.symbol);
       if (a.type === "set_timeframe" && a.timeframe) get().setTimeframe(a.timeframe);
       if (a.type === "open_section" && a.section) {
+        // Backend action names map onto the current section layout; the
+        // scanner now lives inside the Analysis workspace.
         const map: Record<string, Section> = {
-          scanner: "scanner", positions: "positions", chart: "chart",
-          news: "news", markets: "markets", journal: "journal",
+          scanner: "analysis", analysis: "analysis", positions: "positions",
+          chart: "chart", news: "news", markets: "markets",
+          journal: "journal", risk: "risk", settings: "settings",
         };
         if (map[a.section]) set({ section: map[a.section] });
       }
@@ -159,5 +181,5 @@ export const useAres = create<AresState>((set, get) => ({
   },
 }));
 
-// Apply persisted theme class immediately on module load.
-document.documentElement.classList.toggle("dark", storedTheme === "dark");
+// Apply the persisted theme before first paint.
+document.documentElement.classList.toggle("light", storedTheme === "light");

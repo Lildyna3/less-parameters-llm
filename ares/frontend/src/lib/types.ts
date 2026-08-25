@@ -219,5 +219,99 @@ export interface SymbolInfo {
 }
 
 export type Section =
-  | "command" | "markets" | "chart" | "scanner" | "positions"
-  | "journal" | "analytics" | "news" | "settings";
+  | "command" | "markets" | "chart" | "news" | "positions"
+  | "risk" | "analysis" | "journal" | "settings";
+
+export interface NewsArticle {
+  id: string;
+  title: string;
+  summary: string;
+  source: string;
+  source_id: string;
+  url: string | null;
+  published_at: string;
+  categories: string[];
+  symbols: string[];
+  currencies: string[];
+  impact: "LOW" | "MODERATE" | "HIGH" | "CRITICAL";
+  ares_impact: string;
+  ares_interpretation: string;
+  direction: string;
+}
+
+export interface NewsSourceStatus {
+  id: string;
+  name: string;
+  ok: boolean;
+  articles: number;
+  error: string | null;
+  last_attempt: string | null;
+  last_success: string | null;
+}
+
+export interface NewsResponse {
+  articles: NewsArticle[];
+  categories: string[];
+  status: {
+    sources: NewsSourceStatus[];
+    article_count: number;
+    last_refresh: string | null;
+    enabled: boolean;
+  };
+  message: string | null;
+}
+
+export interface MarketPulse {
+  regime: string | null;
+  volatility: string | null;
+  sessions: {
+    utc_time: string;
+    fx_market_open: boolean;
+    active_sessions: string[];
+    overlap: string | null;
+  };
+  movers: Tick[];
+  strongest_setups: ScanRow[];
+  scanned_at: boolean;
+  upcoming_events: CalendarEvent[];
+  data_source: string | null;
+  quotes_live: number;
+  account: AccountSnapshot;
+  risk: RiskSnapshot;
+  news_headlines: NewsArticle[];
+}
+
+export interface RiskSnapshot {
+  emergency_stop: boolean;
+  daily_pl: number;
+  session_trades: number;
+  cooldown_active: boolean;
+  blocks_issued: number;
+  limits: Record<string, number | boolean>;
+}
+
+export interface BridgeStatus {
+  mode: string;
+  attached: boolean;
+  connected: boolean;
+  state: string;
+  bridge: {
+    bridge_version: string;
+    host: string;
+    terminal_connected: boolean;
+    terminal_path: string | null;
+    broker: string | null;
+    server: string | null;
+    mt5_state: string;
+    detail: string;
+  };
+  account: {
+    login_masked: string; broker: string; server: string; currency: string;
+    balance: number; equity: number; is_demo: boolean; trade_allowed: boolean;
+  } | null;
+  last_error: string | null;
+  connected_since: string | null;
+  token_configured: boolean;
+  access_mode: string;
+  instructions: string;
+}
