@@ -1,133 +1,136 @@
 # ARES — Autonomous Real-time Execution & Strategy Intelligence
 
-ARES is an AI-powered trading intelligence and trading-assistance platform:
-a live market command center that combines MT5 market data, a deterministic
-multi-timeframe technical-analysis engine, evidence-based confidence scoring,
-a conversational Command Center, full paper-trading with risk management, and
-a heavily permission-controlled Takeover Mode.
+A private executive trading command center: live market data, a deterministic
+multi-timeframe analysis engine, evidence-based confidence, a professional news
+feed, paper trading with a blocking risk engine, and permission-gated
+autonomous execution — reachable from your phone and laptop at one URL.
 
-**ARES never trades real money in this build.** Execution is DEMO/PAPER only;
-the execution engine refuses orders even if the live flag is set. ARES also
-never fakes data: when MT5 is unavailable it says `DATA SOURCE OFFLINE`, and
-the optional simulation feed labels every price `SIMULATED`.
+**Two rules the whole system is built around:**
+
+1. **Nothing is fabricated.** Prices, news, account data, MT5 status and
+   execution results are either real or explicitly reported as unavailable.
+   There is no placeholder that could be mistaken for data.
+2. **Connection is never permission.** Live-money execution does not exist in
+   this build. Every order passes the risk engine, and autonomous execution
+   needs your explicit authorization with hard caps.
+
+## Quick start
+
+```bash
+cd ares
+cp .env.example .env          # fill in locally; never commit
+
+docker compose up -d --build  # production: one process, one URL
+# or, without Docker:
+./scripts/serve.sh            # builds the web app, then serves it
+
+# development, two processes with hot reload:
+./scripts/dev.sh --sim
+```
+
+Open `http://localhost:8000` (or `http://<lan-ip>:8000` from your phone).
+Deployment, HTTPS and PWA install: [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md).
+
+Without a broker connection, `--sim` / `ARES_MARKET_DATA__MODE=simulation`
+gives a labelled simulated feed for exploring the system. Every simulated
+value is tagged `SIMULATED` in the API, the UI and ARES's own commentary.
+
+## The interface
+
+| Area | What it is |
+|---|---|
+| **Command** | The workspace: market pulse (regime, volatility, session, movers, next event), live chart, strongest evidence, headlines, and the ARES intelligence feed with its command line (⌘K) |
+| **Markets** | Every instrument the data source offers — search, favourites, asset-class filters, watchlist management |
+| **Chart** | The market workspace: chart with levels, entries, stops and targets, plus the paper order ticket and price alerts |
+| **News** | Chronological professional feed with category filters, a reading view, ARES's interpretation, and a direct route into any mentioned instrument's analysis |
+| **Positions** | Open positions with contextual detail, trade baskets, takeover control, recent closes |
+| **Risk** | Daily P/L, loss remaining, drawdown, exposure, utilisation against every limit, emergency stop |
+| **Analysis** | The full structured read — timeframes, structure, liquidity, levels, scenarios, invalidation, and why the confidence score is what it is — plus the market scanner |
+| **Journal** | Every recorded trade with notes, performance figures, and coaching drawn only from recorded behaviour |
+| **Settings** | Nine-section configuration centre: general, connections, trading, risk, AI, notifications, interface, security, system |
 
 ## Architecture
 
 ```
 ares/
-├── backend/            FastAPI (Python 3.11+)
-│   ├── app/
-│   │   ├── config.py          Centralized config (env / .env, pydantic-settings)
-│   │   ├── logging_setup.py   Structured JSON logs with secret redaction
-│   │   ├── status.py          ONLINE/DEGRADED/OFFLINE registry (verified states only)
-│   │   ├── database.py        SQLite via async SQLAlchemy (PostgreSQL-ready)
-│   │   ├── mt5/               Detection, managed adapter, connection monitor
-│   │   ├── market_data/       MT5 + explicit SIMULATED providers, cache, tick loop, sessions
-│   │   ├── analysis/          Swings, structure (BOS/CHOCH), liquidity, dealing range,
-│   │   │                      multi-timeframe engine, evidence-based confidence (1–5)
-│   │   ├── risk/              Risk engine: limits, cooldown, emergency stop
-│   │   ├── execution/         Paper engine, trade baskets, Takeover Mode state machine
-│   │   ├── ai/                Provider abstraction (Gemini/OpenAI/Anthropic),
-│   │   │                      Command Center brain, journal-based coaching
-│   │   ├── news/              Economic calendar, alerts
-│   │   ├── scanner/           Evidence-ranked market scanner
-│   │   └── api/               REST routes + WebSocket hub
-│   └── tests/          58 tests (pytest): analysis, risk, execution, takeover, API, WS
-├── frontend/           React + TypeScript + Vite + Tailwind + lightweight-charts
-└── scripts/dev.sh      One-command dev launcher
+├── backend/            FastAPI · Python 3.11+
+│   └── app/
+│       ├── config.py        every setting, from env/.env
+│       ├── status.py        ONLINE/DEGRADED/OFFLINE, verified only
+│       ├── security.py      optional access token for API + WebSocket
+│       ├── mt5/             detection, direct adapter, bridge server, monitor
+│       ├── market_data/     providers, cache, tick loop, sessions
+│       ├── analysis/        structure, multi-timeframe engine, confidence
+│       ├── risk/            blocking limits, cooldown, emergency stop
+│       ├── execution/       paper engine, baskets, takeover state machine
+│       ├── ai/              provider abstraction, command centre, coaching
+│       ├── news/            RSS ingestion, classification, calendar, alerts
+│       └── api/             REST routes + WebSocket hub
+├── frontend/           React · TypeScript · Vite · Tailwind · lightweight-charts
+├── bridge/             the Windows MT5 bridge (runs beside MetaTrader 5)
+├── Dockerfile          one image: builds the web app, serves everything
+└── docs/               architecture, roadmap, MT5 bridge, deployment
 ```
 
-See [docs/ARES_ARCHITECTURE.md](docs/ARES_ARCHITECTURE.md) and
-[docs/ARES_ROADMAP.md](docs/ARES_ROADMAP.md).
+Details: [docs/ARES_ARCHITECTURE.md](docs/ARES_ARCHITECTURE.md).
 
-## Installation
+## MetaTrader 5
 
-Requirements: Python 3.11+, Node 20+, npm.
+The `MetaTrader5` Python package wraps the **Windows** terminal's IPC and has
+no Linux build, so a cloud backend can never drive MT5 directly. ARES solves
+this with a bridge: a small process runs on a Windows machine beside the
+terminal and dials **out** to your backend over an authenticated WebSocket, so
+Windows needs no open ports.
 
-```bash
-cd ares
-cp .env.example .env          # fill in locally; never commit
-./scripts/dev.sh              # installs deps on first run, starts both servers
-```
+Until that bridge attaches *and* its terminal reports a live broker connection,
+ARES shows MT5 as offline with the real reason. States are precise:
+`DISCONNECTED`, `CONNECTING`, `CONNECTED`, `ERROR`, `MT5 TERMINAL NOT RUNNING`,
+`BROKER DISCONNECTED`, `AUTHENTICATION REQUIRED`.
 
-Then open http://localhost:5173. Backend API docs: http://localhost:8000/docs.
+Setup and how to verify the connection is genuine:
+[docs/MT5_BRIDGE.md](docs/MT5_BRIDGE.md).
 
-Run each side manually instead:
+On Windows, ARES skips the bridge and drives the terminal directly.
 
-```bash
-# backend
-cd backend && python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
-.venv/bin/uvicorn app.main:app --port 8000
+## News
 
-# frontend
-cd frontend && npm install && npm run dev
-```
+Real RSS/Atom ingestion from public financial sources (ForexLive, FXStreet,
+Investing.com, MarketWatch, CNBC, Cointelegraph). Headlines, summaries, sources
+and timestamps are reproduced verbatim; ARES adds keyword-derived instrument
+and currency tagging, a LOW/MODERATE/HIGH/CRITICAL impact score, and its own
+interpretation — always in a separate, labelled block.
 
-## Connecting MetaTrader 5
-
-The official `MetaTrader5` Python package is **Windows-only**. To get live
-data, run the backend on a Windows machine/VM/VPS with the MT5 terminal
-installed:
-
-1. Install MT5 and `pip install MetaTrader5` into the backend venv.
-2. Put **demo-account** credentials in your local `.env`:
-   `MT5_LOGIN`, `MT5_PASSWORD`, `MT5_SERVER` (and `MT5_PATH` if auto-detection
-   fails). Never paste credentials into chat, code, or commits.
-3. Start ARES. It auto-detects the terminal, connects, verifies the account
-   AND that market data actually flows before showing `MT5 ● CONNECTED`,
-   and reconnects automatically if the link drops (execution is disabled
-   the moment the connection is lost).
-
-The UI distinguishes `TERMINAL FOUND` / `CONNECTED` / `MARKET DATA STREAMING`
-— Settings → Connections shows the genuine state and the actual reason for
-any failure. On non-Windows hosts MT5 truthfully reports OFFLINE.
-
-## Demo / simulation mode
-
-Without MT5 you can explicitly enable the simulated feed for testing:
-
-```bash
-./scripts/dev.sh --sim            # or ARES_MARKET_DATA__MODE=simulation
-```
-
-Every simulated price/candle/analysis is labeled `SIMULATED` in the API, the
-UI, and the AI briefings. It is never silently substituted for live data.
-
-## AI provider (optional)
-
-Set in `.env`: `ARES_AI__PROVIDER=gemini|openai|anthropic` and
-`ARES_AI__API_KEY=...`. The key is verified at startup; the AI status shows
-the real result. Without a provider, the Command Center still works — bias,
-confidence, and levels always come from the deterministic analysis engine
-(the LLM only narrates; it can never invent confidence or execute anything).
+If the host cannot reach those sources, the feed is empty and says exactly
+that, per source. ARES never writes a headline.
 
 ## Safety model
 
-- Paper trading only; live execution does not exist in this build.
-- Every order passes the risk engine (daily loss, drawdown, exposure,
-  position count/size, spread, cooldown, emergency stop).
-- Takeover Mode: ARES may *request* it (4/5+ evidence only); **you** must
-  explicitly authorize on the takeover panel; hard caps on trades, total
-  loss and duration; auto-shutdown; instant stop/emergency stop; chat
-  messages can never authorize execution.
-- Secrets live only in `.env` (gitignored); logs redact passwords/keys; the
-  MT5 password is never displayed, logged, or sent to any AI.
+- Paper trading only; there is no live execution path in this build.
+- Every order is checked against daily loss, drawdown, open positions,
+  exposure, trades per session, position size, spread, and post-loss cooldown.
+- Orders are priced from a fresh quote; a stale quote refuses the order rather
+  than filling at an old price.
+- Takeover Mode: ARES may *request* at 4/5 evidence or better; you authorize
+  explicitly; hard caps on trades, total loss and duration; auto-shutdown;
+  instant stop. A chat message can never authorize execution.
+- Secrets live in the environment only. The MT5 password never leaves the
+  bridge machine, is never logged, never displayed, and never sent to any AI.
 
 ## Testing
 
 ```bash
-cd backend && .venv/bin/python -m pytest      # 58 tests
-cd frontend && npm run build                  # type-checks + builds
+cd backend  && .venv/bin/python -m pytest    # 97 tests
+cd frontend && npm test                      # 19 tests
+cd frontend && npm run build                 # type-check + production build
 ```
 
 ## Troubleshooting
 
-- **`DATA SOURCE OFFLINE`** — MT5 isn't connected and simulation mode isn't
-  enabled. Check Settings → Connections for the exact reason.
-- **`MT5 ● OFFLINE` on Windows** — verify `.env` credentials, that the
-  terminal is installed (or set `MT5_PATH`), and that the account/server
-  names match your broker exactly.
-- **AI OFFLINE** — no provider/key configured, or verification failed; the
-  status reason shows the HTTP error.
-- **Web intelligence unavailable** — expected: no research provider is
-  bundled. The calendar starts empty and only holds events you add.
+| Symptom | Meaning |
+|---|---|
+| `DATA SOURCE OFFLINE` | no MT5 bridge attached and simulation is off — see Settings → Connections |
+| `NEWS UNAVAILABLE` | this host cannot reach the news sources; ARES shows nothing rather than inventing |
+| `MT5 · AUTHENTICATION REQUIRED` | `ARES_BRIDGE_TOKEN` is unset on the server |
+| `MT5 · MT5 TERMINAL NOT RUNNING` | the bridge is connected but the terminal is closed |
+| AI `OFFLINE` | no provider/key configured, or key verification failed — analysis still works |
+| 401 from the API | this deployment requires `ARES_ACCESS_TOKEN`; enter it when prompted |

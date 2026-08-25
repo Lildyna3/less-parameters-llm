@@ -1,0 +1,36 @@
+# ARES production stack.
+#
+#   cp .env.example .env      # fill in locally; never commit
+#   docker compose up -d --build
+#
+# Then open http://<host>:8000 from any device on the network. Put a TLS
+# terminator (Caddy, nginx, Cloudflare Tunnel) in front before exposing it to
+# the internet — the access token travels in a header and the WebSocket query
+# string, so it must ride over HTTPS.
+
+services:
+  ares:
+    build: .
+    image: ares:latest
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    env_file:
+      - .env
+    environment:
+      # Secrets come from .env; only non-sensitive defaults live here.
+      ARES_SYSTEM__HOST: 0.0.0.0
+      ARES_SYSTEM__PORT: "8000"
+      ARES_ENVIRONMENT: production
+    volumes:
+      # Persist the trade journal across redeploys.
+      - ares-data:/app/backend/data
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/api/health', timeout=4).status==200 else 1)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+
+volumes:
+  ares-data:

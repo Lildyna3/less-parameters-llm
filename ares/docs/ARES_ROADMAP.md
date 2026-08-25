@@ -1,39 +1,72 @@
 # ARES Roadmap & Phase Status
 
 Build environment: Linux host, Python 3.11.15, Node 22, npm 10.9.7.
-The dependency-installation blocker reported for Phase 1 does not exist in
-this environment — pip and npm registries were verified reachable before
-building, and all installs completed normally.
+
+## Original build (phases 1–16)
+
+| Phase | Scope | Status |
+|---|---|---|
+| 1 | Foundation — structure, config, .env protection, logging, status registry, health, MT5 detection | **COMPLETE** |
+| 2 | UI shell | **SUPERSEDED** by the executive redesign (phase 17) |
+| 3 | Market data — providers, tick loop, caching, WebSocket | **COMPLETE** |
+| 4 | Charts — candlesticks, 8 timeframes, volume, live updates, overlays | **COMPLETE** |
+| 5 | Technical analysis — trend, swings, S/R, liquidity, BOS/CHOCH, premium/discount | **COMPLETE** |
+| 6 | AI Command Center — intents, structured analysis, app control | **COMPLETE** |
+| 7 | MT5 integration | **COMPLETE** via the Windows bridge (phase 18) |
+| 8 | Demo/paper trading | **COMPLETE** |
+| 9 | Risk management | **COMPLETE** |
+| 10 | Market scanner | **COMPLETE** (now inside the Analysis workspace) |
+| 11 | News / web intelligence | **COMPLETE** — real RSS engine (phase 19) |
+| 12 | Journal + analytics + coaching | **COMPLETE** |
+| 13 | Takeover Mode | **COMPLETE** |
+| 14 | Performance | **COMPLETE** |
+| 15 | Security + testing | **COMPLETE** |
+| 16 | Final polish | **COMPLETE** |
+
+## Overhaul (phases 17–22)
 
 | Phase | Scope | Status | Notes |
 |---|---|---|---|
-| 1 | Foundation (project structure, config, .env protection, logging, status registry, health endpoint, MT5 detection) | **COMPLETE** | Backend starts; `/api/health` verified live; MT5 truthfully OFFLINE on Linux (Windows-only package); secrets redacted in logs; tests pass |
-| 2 | UI shell (new design direction — replaces the original UI concept) | **COMPLETE** | Dark-first design system, rail nav, top status bar, persisted theme, mounted-section state preservation, mobile layout |
-| 3 | Market data (MT5 provider, explicit SIMULATED provider, tick loop, caching, WS) | **COMPLETE** | `DATA SOURCE OFFLINE` when nothing real is available; SIMULATED labeled everywhere |
-| 4 | Charts (candlesticks, 7 timeframes, volume, crosshair, zoom/pan, live updates, overlays) | **COMPLETE** | lightweight-charts v5; chart instance preserved across navigation; trade + level overlays |
-| 5 | Technical analysis (trend, swings, S/R, liquidity/sweeps, BOS/CHOCH, premium/discount, volatility) | **COMPLETE** | Deterministic, evidence + confidence, unit-tested |
-| 6 | AI Command Center (intents, structured analysis, follow-ups, app control actions) | **COMPLETE** | LLM optional (Gemini/OpenAI/Anthropic, verified at startup); deterministic narrator fallback; chat can never authorize execution |
-| 7 | MT5 integration (managed adapter, auto-connect flow, verification, monitor, settings UI) | **COMPLETE (code)** / **UNVERIFIABLE ON THIS HOST** | The MetaTrader5 package is Windows-only; the full connect path needs a Windows+MT5 host to exercise. Offline/degraded paths are tested |
-| 8 | Demo/paper trading (validate, fill, SL/TP, history, account metrics) | **COMPLETE** | Fills at real bid/ask of the active source; refuses without data |
-| 9 | Risk management (limits, cooldown, emergency stop, spread protection) | **COMPLETE** | Blocking, auditable, configurable from Settings |
-| 10 | Market scanner | **COMPLETE** | Evidence-ranked table, click-through to chart |
-| 11 | News / web intelligence | **COMPLETE (honest-minimal)** | Calendar holds only user/licensed events — never fabricated; web research truthfully "unavailable" until a provider is wired |
-| 12 | Trade journal + analytics + coaching | **COMPLETE** | SQLite journal, behavior-based coach, analytics dashboard |
-| 13 | Takeover Mode | **COMPLETE** | Request→explicit authorize→hard-capped execution→auto shutdown; baskets; instant stop |
-| 14 | Performance | **COMPLETE** | TTL caches, one WS, memoized store updates, mounted sections, ~130 KB gzip bundle |
-| 15 | Security + testing | **COMPLETE** | .env-only secrets, log redaction, masked account, 62 backend tests + 14 vitest component/store tests + tsc build + Playwright smoke |
-| 16 | Final polish | **COMPLETE** | Light theme, mobile layout, docs, one-command launcher |
+| 17 | Executive design system + full UI rebuild | **COMPLETE** | New tokens, nav, Command Center workspace, Risk Command, Analysis, Settings; verified at 1600/834/390 px |
+| 18 | Windows MT5 bridge | **COMPLETE** | Protocol, server, adapter, Windows client, precise states; data path verified end-to-end in an automated test |
+| 19 | Real news engine | **COMPLETE (code)** / **DATA BLOCKED HERE** | RSS/Atom ingestion, classification, impact, interpretation. This sandbox's network policy blocks all news hosts, so the feed is correctly empty here; it populates on any host with normal egress |
+| 20 | Responsive + PWA | **COMPLETE** | Per-device layouts, manifest, icons, shell-only service worker |
+| 21 | Production packaging | **COMPLETE** | Single-process serving, Dockerfile, compose, serve.sh, systemd unit, access token |
+| 22 | Deployment to a public URL | **NOT DONE** | Cannot be done from this environment — see below |
+
+## Deployment status (explicit)
+
+**There is no production URL.** ARES is packaged and verified to run as a
+single-process web app, but this build environment is an ephemeral sandbox with
+no public ingress and no hosting credentials, so nothing was actually deployed.
+Claiming otherwise would be false.
+
+What *was* verified here: the backend serves the SPA, manifest, service worker
+and deep links on one port; the access token gate rejects unauthenticated API
+and WebSocket clients; the bridge protocol carries real market data end-to-end;
+and the UI renders correctly on desktop, tablet and phone viewports.
+
+To get a URL, run one of the documented paths in `docs/DEPLOYMENT.md` (Docker
+Compose behind Caddy or a Cloudflare Tunnel is the shortest route).
 
 ## Known limitations
 
-- Live MT5 connection requires a Windows host; on other platforms the MT5
-  component is truthfully OFFLINE and only simulation mode provides data.
-- Paper P/L converts quote-currency P/L 1:1 to the account currency
-  (JPY pairs adjusted); good enough for demo metrics, not broker-exact.
-- Economic calendar has no live feed; web intelligence has no provider.
+- **No public deployment** (above). One command on your own host or VPS.
+- **MT5 requires the Windows bridge.** Verified against a protocol-level test
+  client, not yet against a live broker terminal — that needs your Windows
+  machine and demo credentials.
+- **News needs network egress** to the source hosts; blocked in this sandbox.
+- **Economic calendar has no live feed.** Events are added manually or by a
+  future licensed integration; ARES never invents them.
+- **Web research layer** is absent — reported as unavailable rather than faked.
+- **Paper P/L** converts quote-currency P/L 1:1 to the account currency (JPY
+  pairs adjusted). Fine for demo metrics, not broker-exact.
+- **No live-money execution path** exists in this build, by design.
 
 ## Next steps
 
-1. Exercise the MT5 layer on a Windows demo account end-to-end.
-2. Wire a licensed calendar/news feed and a web-research provider.
-3. PostgreSQL profile + deployment hardening for multi-user use.
+1. Deploy with Docker Compose behind TLS; install the PWA on your phone.
+2. Stand up the Windows bridge against your demo account and run the four
+   verification checks in `docs/MT5_BRIDGE.md`.
+3. Confirm the news feed populates once ARES runs on a host with normal egress.
+4. Optional: licensed calendar/news feed, PostgreSQL profile, multi-user auth.

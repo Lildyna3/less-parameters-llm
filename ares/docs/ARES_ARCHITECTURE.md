@@ -15,6 +15,83 @@
    hard caps → emergency stop closes everything and blocks execution.
 4. **Fail gracefully.** Any subsystem can be offline while the rest runs.
 
+## Deployment shape
+
+ARES runs as **one process**. FastAPI serves the API, the client WebSocket, the
+bridge WebSocket, and the built SPA from a single origin — so there is one URL
+for phone, laptop and desktop, no CORS in production, and no separate frontend
+server to start.
+
+```
+                 ┌─────────────────────────────────────────┐
+  phone ────────▶│  ARES process (Linux / cloud / laptop)  │
+  laptop ───────▶│                                         │
+  desktop ──────▶│  /            SPA (built React bundle)  │
+                 │  /api/*       REST                      │
+                 │  /ws          live ticks, alerts        │
+                 │  /bridge/ws   Windows MT5 bridge  ◀─────┼──── Windows + MT5
+                 │  SQLite       journal                   │
+                 └─────────────────────────────────────────┘
+```
+
+Access control is a single middleware: with `ARES_ACCESS_TOKEN` set, every
+`/api/*` path and the client WebSocket require the token (header, bearer, or
+query parameter for the socket). `/api/health` stays public for uptime probes.
+Static assets stay public so the unlock screen can load. The token is supplied
+by the user at runtime and stored in their browser — it is never compiled into
+the bundle.
+
+## MT5 access: two shapes, one interface
+
+| Host | Path | Adapter |
+|---|---|---|
+| Windows with the terminal installed | direct terminal IPC | `MT5Adapter` + `MT5ConnectionMonitor` |
+| Linux / cloud / macOS | Windows bridge dials in | `BridgeMT5Adapter` over `MT5BridgeServer` |
+
+Both expose the same surface (`connected`, `get_tick`, `get_candles`,
+`get_symbols`, `status_payload`), so the market-data service, analysis engine
+and execution engine are unchanged by which one is active. `build_services()`
+picks the direct adapter only when detection proves the package and terminal
+are genuinely usable and credentials exist; otherwise it selects the bridge.
+
+The bridge protocol is a small JSON RPC over one WebSocket:
+
+* `hello` / `hello_ack` — token check, protocol version, terminal state.
+* `heartbeat` (bridge → ARES, every ~15s) — carries the terminal's own state
+  and non-sensitive account facts. No heartbeat for 45s ⇒ treated as gone.
+* `request` / `response` — correlated by id, with per-call timeouts. A pending
+  call raises when the bridge disappears, so callers degrade instead of hanging.
+
+`ui_state` maps the bridge's report onto exactly what the interface shows:
+`DISCONNECTED`, `CONNECTING`, `CONNECTED`, `ERROR`,
+`MT5 TERMINAL NOT RUNNING`, `BROKER DISCONNECTED`, `AUTHENTICATION REQUIRED`,
+`DISABLED`. There is no code path that reports CONNECTED without a live
+heartbeat whose `terminal_connected` is true.
+
+## News pipeline
+
+```
+DEFAULT_SOURCES ─▶ httpx (concurrent) ─▶ parse_feed (RSS 2.0 + Atom, stdlib)
+        │                                        │
+        │                                        ▼
+        │                            classify(): symbols, currencies,
+        │                            categories, impact, direction
+        │                                        │
+        ▼                                        ▼
+  SourceStatus per feed              build_interpretation(): ARES's read,
+  (ok / error / counts)              labelled and kept separate
+                                                 │
+                                                 ▼
+                                    dedupe by URL hash, 3-day window,
+                                    newest first, capped
+```
+
+Source text is reproduced verbatim (markup stripped, length-trimmed).
+Everything ARES adds lives in `impact`, `ares_impact`, `ares_interpretation`
+and `direction`. When no source is reachable, the article list is empty and the
+status carries the real per-source errors — the UI then shows
+"News unavailable" with the reason instead of anything invented.
+
 ## Backend (FastAPI, Python)
 
 ```
@@ -44,6 +121,10 @@ ARES START → load config → validate env → detect MT5 → connect (verified
 | `ai/provider.py` | `AIProvider` abstraction: Gemini / OpenAI / Anthropic; startup verification; key redaction |
 | `ai/command.py` | Command Center: deterministic intent parsing + orchestration; UI actions; execution intents can only *request*, never authorize |
 | `ai/coach.py` | Behavior-based coaching from the recorded journal (min-trades gate) |
+| `mt5/bridge.py` | Bridge server: token handshake, heartbeat-driven state, correlated RPC, `BridgeMT5Adapter` |
+| `security.py` | Optional access token for API + WebSocket; secrets redacted from logs |
+| `news/feeds.py` | RSS 2.0 + Atom parsing (stdlib), source registry, category constants |
+| `news/service.py` | Concurrent fetch, classification, impact scoring, ARES interpretation, truthful per-source status |
 | `news/calendar.py` | Economic events (user/licensed-feed only — never fabricated); high-impact proximity warnings |
 | `news/alerts.py` | Price alerts, risk/connection/execution events, WS broadcast |
 | `scanner/scanner.py` | Concurrent evidence-ranked scan of watched symbols |
@@ -63,6 +144,32 @@ GET/POST /api/takeover /api/takeover/request /api/takeover/authorize /api/takeov
 GET/POST /api/calendar /api/calendar/events /api/alerts /api/alerts/price
 WS   /ws
 ```
+
+## Design system
+
+The interface is built on a small set of tokens rather than component library
+defaults: layered warm near-black surfaces (`--s0`…`--s3`), hairline borders at
+low alpha, a warm neutral type ramp, and **one** accent (brass) reserved for
+active state, focus and key figures. Semantic colour is desaturated so a screen
+full of numbers stays calm. A serif display face carries identity and headline
+figures; small-caps labels organise the layout; tables use hairline rows with
+no striping. Motion is limited to a 180 ms rise on new content, a slow breathe
+on pending states, and a single settle pulse on changed values — all disabled
+under `prefers-reduced-motion`.
+
+Layouts are written per device rather than scaled: from `xl` the command
+surface fills the viewport exactly and only inner regions scroll; on phones the
+page scrolls, tables become thumb-sized rows, and navigation is a bottom bar of
+the six priority areas with the rest behind a sheet.
+
+## PWA
+
+`manifest.webmanifest` (standalone display, maskable icons, brass-on-black
+theme) plus a shell-only service worker. The worker caches HTML, hashed assets
+and icons; navigations are network-first so a deploy is picked up immediately.
+It **never** caches `/api/*`, `/ws` or `/bridge/*` — a cached price is a wrong
+price, and serving one would be indistinguishable from fabricating it. Offline,
+ARES loads and reports data as unavailable.
 
 ## Frontend (React + TS + Vite + Tailwind)
 

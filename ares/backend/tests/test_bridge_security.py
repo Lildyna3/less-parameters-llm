@@ -104,6 +104,71 @@ def test_bridge_broker_disconnected_state(client):
         assert client.get("/api/bridge").json()["state"] == "BROKER DISCONNECTED"
 
 
+def test_market_data_flows_through_the_bridge(tmp_path):
+    """The whole point of the bridge: with one attached, quotes and candles are
+    served from it and tagged MT5. With none, the data source is OFFLINE."""
+    config = AresConfig(environment="test")
+    # Real MT5 data path (not simulation) so the bridge is the only source.
+    config.market_data = MarketDataSettings(mode="mt5", tick_interval_seconds=0.05)
+    config.system.database_url = f"sqlite+aiosqlite:///{tmp_path}/flow.db"
+    config.system.serve_frontend = False
+    config.news.news_feed_enabled = False
+    config.bridge.token = BRIDGE_TOKEN
+
+    candles = [
+        {"time": 1_800_000_000 + i * 900, "open": 1.085, "high": 1.0855,
+         "low": 1.0845, "close": 1.0851, "volume": 600}
+        for i in range(120)
+    ]
+
+    with TestClient(create_app(config)) as client:
+        # No bridge: refuse rather than invent.
+        assert client.get("/api/market/EURUSD").status_code == 503
+        assert client.get("/api/health").json()["components"]["market_data"]["state"] == "OFFLINE"
+
+        with client.websocket_connect("/bridge/ws") as ws:
+            ws.send_text(hello())
+            ws.receive_text()
+
+            # Serve one tick request through the bridge.
+            def answer(expected_method: str, result):
+                request = json.loads(ws.receive_text())
+                assert request["type"] == "request"
+                assert request["method"] == expected_method
+                ws.send_text(json.dumps({"type": "response", "id": request["id"], "result": result}))
+
+            import threading
+
+            tick_payload = {"symbol": "EURUSD", "bid": 1.08512, "ask": 1.08520,
+                            "spread_points": 8.0, "time": "2026-08-25T02:50:00+00:00"}
+
+            # The HTTP call blocks until the bridge answers, so answer from a thread.
+            holder: dict = {}
+
+            def fetch():
+                holder["tick"] = client.get("/api/market/EURUSD")
+
+            worker = threading.Thread(target=fetch)
+            worker.start()
+            # The service may probe daily references first; answer whatever it asks.
+            for _ in range(6):
+                request = json.loads(ws.receive_text())
+                result = tick_payload if request["method"] == "tick" else candles
+                ws.send_text(json.dumps({"type": "response", "id": request["id"], "result": result}))
+                if holder.get("tick") is not None:
+                    break
+            worker.join(timeout=10)
+
+            response = holder["tick"]
+            assert response.status_code == 200, response.text
+            body = response.json()
+            assert body["bid"] == 1.08512
+            assert body["source"] == "MT5"  # never SIMULATED when the bridge serves
+
+        # Bridge gone: back to the truth immediately.
+        assert client.get("/api/bridge").json()["connected"] is False
+
+
 @pytest.mark.asyncio
 async def test_adapter_returns_nothing_without_bridge():
     from app.config import BridgeSettings
