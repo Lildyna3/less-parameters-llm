@@ -37,6 +37,7 @@ class ComponentStatus:
 COMPONENTS = (
     "mt5",
     "market_data",
+    "news",
     "ai",
     "database",
     "websocket",

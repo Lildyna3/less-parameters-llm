@@ -1,0 +1,168 @@
+"""MT5 bridge protocol + access-token security.
+
+The bridge tests matter most for honesty: they prove ARES reports CONNECTED
+only when a real bridge says its terminal is live, and drops to a truthful
+state the moment the bridge goes away.
+"""
+
+import json
+
+import pytest
+from fastapi.testclient import TestClient
+
+from app.config import AresConfig, MarketDataSettings
+from app.main import create_app
+from app.mt5.bridge import BridgeDisconnected, BridgeMT5Adapter, MT5BridgeServer
+
+BRIDGE_TOKEN = "test-bridge-secret"
+
+
+@pytest.fixture
+def bridge_config(tmp_path) -> AresConfig:
+    config = AresConfig(environment="test")
+    config.market_data = MarketDataSettings(mode="simulation", tick_interval_seconds=0.05)
+    config.system.database_url = f"sqlite+aiosqlite:///{tmp_path}/bridge.db"
+    config.system.serve_frontend = False
+    config.news.news_feed_enabled = False
+    config.bridge.token = BRIDGE_TOKEN
+    return config
+
+
+@pytest.fixture
+def client(bridge_config):
+    with TestClient(create_app(bridge_config)) as c:
+        yield c
+
+
+def hello(**overrides) -> str:
+    payload = {
+        "type": "hello", "token": BRIDGE_TOKEN, "bridge_version": "1.0.0",
+        "host": "WIN-TEST (Windows 11)", "terminal_connected": True,
+        "mt5_state": "CONNECTED", "detail": "", "terminal_path": r"C:\MT5\terminal64.exe",
+    }
+    payload.update(overrides)
+    return json.dumps(payload)
+
+
+def test_bridge_rejects_bad_token(client):
+    with pytest.raises(Exception):
+        with client.websocket_connect("/bridge/ws") as ws:
+            ws.send_text(json.dumps({"type": "hello", "token": "wrong"}))
+            ws.receive_text()  # server closes instead of acking
+
+
+def test_bridge_attaches_and_reports_connected(client):
+    # Before any bridge: honestly disconnected.
+    assert client.get("/api/bridge").json()["state"] == "DISCONNECTED"
+
+    with client.websocket_connect("/bridge/ws") as ws:
+        ws.send_text(hello())
+        ack = json.loads(ws.receive_text())
+        assert ack["type"] == "hello_ack"
+
+        ws.send_text(json.dumps({
+            "type": "heartbeat", "terminal_connected": True, "mt5_state": "CONNECTED",
+            "detail": "", "broker": "Test Broker", "server": "Test-Demo",
+            "account": {"login": 12345678, "broker": "Test Broker", "server": "Test-Demo",
+                        "currency": "USD", "balance": 10000.0, "equity": 10050.0,
+                        "margin_free": 9000.0, "leverage": 100, "trade_allowed": True,
+                        "is_demo": True},
+        }))
+        # Give the server loop a moment by issuing a request through the API.
+        status = client.get("/api/bridge").json()
+        assert status["attached"] is True
+        assert status["state"] == "CONNECTED"
+        assert status["bridge"]["host"].startswith("WIN-TEST")
+        # Account is exposed with the login masked, never in full.
+        assert status["account"]["login_masked"].endswith("5678")
+        assert "12345678" not in json.dumps(status)
+        assert status["account"]["is_demo"] is True
+
+    # After the socket closes the state must fall back to the truth.
+    after = client.get("/api/bridge").json()
+    assert after["attached"] is False
+    assert after["connected"] is False
+    assert after["state"] == "DISCONNECTED"
+
+
+def test_bridge_terminal_states_are_surfaced(client):
+    with client.websocket_connect("/bridge/ws") as ws:
+        ws.send_text(hello(terminal_connected=False, mt5_state="MT5_TERMINAL_NOT_RUNNING",
+                           detail="initialize failed (-10003)"))
+        ws.receive_text()
+        status = client.get("/api/bridge").json()
+        assert status["state"] == "MT5 TERMINAL NOT RUNNING"
+        assert status["connected"] is False
+        assert "-10003" in status["bridge"]["detail"]
+
+
+def test_bridge_broker_disconnected_state(client):
+    with client.websocket_connect("/bridge/ws") as ws:
+        ws.send_text(hello(terminal_connected=False, mt5_state="BROKER_DISCONNECTED",
+                           detail="no tick retrieved"))
+        ws.receive_text()
+        assert client.get("/api/bridge").json()["state"] == "BROKER DISCONNECTED"
+
+
+@pytest.mark.asyncio
+async def test_adapter_returns_nothing_without_bridge():
+    from app.config import BridgeSettings
+
+    server = MT5BridgeServer(BridgeSettings(token="x"))
+    adapter = BridgeMT5Adapter(server)
+    assert adapter.connected is False
+    assert await adapter.get_tick("EURUSD") is None
+    assert await adapter.get_candles("EURUSD", "M15") == []
+    assert await adapter.get_symbols() == []
+    with pytest.raises(BridgeDisconnected):
+        await server.call("tick", {"symbol": "EURUSD"})
+
+
+def test_bridge_status_without_token_says_auth_required(tmp_path):
+    config = AresConfig(environment="test")
+    config.market_data = MarketDataSettings(mode="simulation", tick_interval_seconds=0.05)
+    config.system.database_url = f"sqlite+aiosqlite:///{tmp_path}/nb.db"
+    config.system.serve_frontend = False
+    config.news.news_feed_enabled = False
+    config.bridge.token = None
+    with TestClient(create_app(config)) as c:
+        status = c.get("/api/bridge").json()
+        assert status["state"] == "AUTHENTICATION REQUIRED"
+        assert status["token_configured"] is False
+
+
+# -- access control -----------------------------------------------------------
+
+@pytest.fixture
+def secured_client(tmp_path):
+    config = AresConfig(environment="test")
+    config.market_data = MarketDataSettings(mode="simulation", tick_interval_seconds=0.05)
+    config.system.database_url = f"sqlite+aiosqlite:///{tmp_path}/sec.db"
+    config.system.serve_frontend = False
+    config.news.news_feed_enabled = False
+    config.security.access_token = "s3cret-access"
+    with TestClient(create_app(config)) as c:
+        yield c
+
+
+def test_api_requires_token_when_configured(secured_client):
+    assert secured_client.get("/api/status").status_code == 401
+    assert secured_client.get("/api/positions").status_code == 401
+    # Health stays public for uptime checks.
+    assert secured_client.get("/api/health").status_code == 200
+
+
+def test_api_accepts_valid_token(secured_client):
+    headers = {"X-ARES-Token": "s3cret-access"}
+    assert secured_client.get("/api/status", headers=headers).status_code == 200
+    bearer = {"Authorization": "Bearer s3cret-access"}
+    assert secured_client.get("/api/status", headers=bearer).status_code == 200
+    assert secured_client.get("/api/status", headers={"X-ARES-Token": "wrong"}).status_code == 401
+
+
+def test_websocket_requires_token(secured_client):
+    with pytest.raises(Exception):
+        with secured_client.websocket_connect("/ws") as ws:
+            ws.receive_text()
+    with secured_client.websocket_connect("/ws?access_token=s3cret-access") as ws:
+        ws.send_text("ping")  # accepted

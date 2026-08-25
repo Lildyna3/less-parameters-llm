@@ -8,6 +8,7 @@ from pydantic import BaseModel, Field
 
 from ..ai.coach import coach_from_journal
 from ..market_data.sessions import current_sessions
+from ..news.feeds import CATEGORIES as NEWS_CATEGORIES
 from ..status import status_registry
 
 router = APIRouter(prefix="/api")
@@ -380,6 +381,111 @@ async def calendar_add(body: CalendarEventBody, request: Request):
     except ValueError as exc:
         raise HTTPException(422, detail=str(exc))
     return {"event": event.as_dict()}
+
+
+# ---- news feed -------------------------------------------------------------------------------
+
+@router.get("/news")
+async def news(request: Request, category: str | None = None, symbol: str | None = None,
+               impact: str | None = None, search: str | None = None, limit: int = 60):
+    svc = services(request)
+    articles = svc.news.query(category=category, symbol=symbol, impact=impact,
+                              search=search, limit=max(1, min(limit, 200)))
+    payload = svc.news.status_payload()
+    return {
+        "articles": articles,
+        "categories": ["ALL", *NEWS_CATEGORIES],
+        "status": payload,
+        "message": None if articles else (
+            "No news available. " + (
+                "News sources are unreachable from this host — ARES shows nothing "
+                "rather than inventing headlines."
+                if payload["enabled"] else "The news feed is disabled in configuration."
+            )
+        ),
+    }
+
+
+@router.get("/news/{article_id}")
+async def news_detail(article_id: str, request: Request):
+    svc = services(request)
+    article = svc.news.get(article_id)
+    if article is None:
+        raise HTTPException(404, detail="Article not found or expired from the feed")
+    return {"article": article, "related": svc.news.related(article_id)}
+
+
+@router.post("/news/refresh")
+async def news_refresh(request: Request):
+    svc = services(request)
+    return await svc.news.refresh(force=True)
+
+
+# ---- market pulse ----------------------------------------------------------------------------
+
+@router.get("/pulse")
+async def pulse(request: Request):
+    """Aggregate market state for the Command Center. Every field is derived
+    from real data; absent data is reported as null, never invented."""
+    svc = services(request)
+    ticks = svc.market_data.fresh_ticks()
+    movers = sorted(
+        (t for t in ticks.values() if t.get("change_percent") is not None),
+        key=lambda t: abs(t["change_percent"]), reverse=True,
+    )[:6]
+
+    scan = svc.scanner.last_scan
+    regime = None
+    if scan:
+        biases = [row["bias"] for row in scan]
+        bullish = biases.count("bullish")
+        bearish = biases.count("bearish")
+        if bullish > bearish * 2:
+            regime = "risk-on / broadly bullish"
+        elif bearish > bullish * 2:
+            regime = "risk-off / broadly bearish"
+        elif bullish + bearish < len(biases) / 2:
+            regime = "ranging / no directional consensus"
+        else:
+            regime = "mixed / two-way"
+        volatility_states = [row["volatility"] for row in scan]
+        elevated = volatility_states.count("elevated")
+        volatility = ("elevated" if elevated > len(scan) / 3
+                      else "compressed" if volatility_states.count("compressed") > len(scan) / 3
+                      else "normal")
+        strongest = [r for r in scan if r["confidence"] >= 4][:5]
+    else:
+        volatility, strongest = None, []
+
+    return {
+        "regime": regime,
+        "volatility": volatility,
+        "sessions": current_sessions(),
+        "movers": movers,
+        "strongest_setups": strongest,
+        "scanned_at": bool(scan),
+        "upcoming_events": svc.calendar.upcoming(hours=24)[:5],
+        "data_source": svc.market_data.source_label if ticks else None,
+        "quotes_live": len(ticks),
+        "account": svc.paper.account_snapshot(),
+        "risk": svc.risk.snapshot(),
+        "news_headlines": svc.news.query(limit=5),
+    }
+
+
+# ---- MT5 bridge -------------------------------------------------------------------------------
+
+@router.get("/bridge")
+async def bridge_status(request: Request):
+    svc = services(request)
+    payload = svc.bridge.status_payload()
+    payload["access_mode"] = "direct" if svc.mt5_monitor is not None else "bridge"
+    payload["instructions"] = (
+        "Run ares/bridge/ares_mt5_bridge.py on a Windows machine with MetaTrader 5 "
+        "installed. Set ARES_BACKEND_URL and ARES_BRIDGE_TOKEN there to match this "
+        "server. See docs/MT5_BRIDGE.md."
+    )
+    return payload
 
 
 @router.get("/alerts")

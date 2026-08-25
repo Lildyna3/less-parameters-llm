@@ -50,8 +50,31 @@ def takeover(paper, baskets) -> TakeoverManager:
 
 
 @pytest.fixture
+def client_factory(test_config):
+    """Builds a TestClient over the full app (news fetching disabled so tests
+    never touch the network)."""
+    from fastapi.testclient import TestClient
+
+    from app.main import create_app
+
+    created = []
+
+    def _factory():
+        client = TestClient(create_app(test_config))
+        client.__enter__()
+        created.append(client)
+        return client
+
+    yield _factory
+    for client in created:
+        client.__exit__(None, None, None)
+
+
+@pytest.fixture
 def test_config(tmp_path) -> AresConfig:
     config = AresConfig(environment="test")
     config.market_data = MarketDataSettings(mode="simulation", tick_interval_seconds=0.05)
     config.system.database_url = f"sqlite+aiosqlite:///{tmp_path}/test.db"
+    config.system.serve_frontend = False   # tests exercise the API, not the SPA
+    config.news.news_feed_enabled = False  # never touch the network in tests
     return config

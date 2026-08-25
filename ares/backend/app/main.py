@@ -14,9 +14,12 @@ from __future__ import annotations
 import asyncio
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
+from pathlib import Path
 
 from fastapi import FastAPI, WebSocket
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
 
 from .ai.command import CommandCenter
 from .ai.provider import AIProvider, build_provider
@@ -32,11 +35,14 @@ from .logging_setup import get_logger, setup_logging
 from .market_data.providers import MT5Provider, SimulatedProvider
 from .market_data.service import MarketDataService
 from .mt5.adapter import MT5Adapter
+from .mt5.bridge import BridgeMT5Adapter, MT5BridgeServer
 from .mt5.monitor import MT5ConnectionMonitor
 from .news.alerts import AlertManager
 from .news.calendar import EconomicCalendar
+from .news.service import NewsService
 from .risk.engine import RiskEngine
 from .scanner.scanner import MarketScanner
+from .security import AccessTokenMiddleware, token_ok
 from .status import ComponentState, status_registry
 
 log = get_logger("main")
@@ -45,8 +51,10 @@ log = get_logger("main")
 @dataclass
 class AppServices:
     config: AresConfig
-    mt5: MT5Adapter
-    mt5_monitor: MT5ConnectionMonitor
+    mt5: MT5Adapter | BridgeMT5Adapter
+    mt5_monitor: MT5ConnectionMonitor | None
+    bridge: MT5BridgeServer
+    news: NewsService
     market_data: MarketDataService
     engine: AnalysisEngine
     scanner: MarketScanner
@@ -62,8 +70,21 @@ class AppServices:
 
 
 def build_services(config: AresConfig) -> AppServices:
-    mt5 = MT5Adapter(config.mt5)
-    monitor = MT5ConnectionMonitor(mt5, config.mt5.reconnect_interval_seconds)
+    # MT5 access has two shapes. On Windows the terminal can be driven directly;
+    # everywhere else (Linux/cloud) a Windows bridge dials in. Detection decides,
+    # and the chosen path is reported honestly — neither one is ever faked.
+    bridge_server = MT5BridgeServer(config.bridge)
+    direct = MT5Adapter(config.mt5)
+    monitor: MT5ConnectionMonitor | None = None
+
+    if direct.detection.usable and config.mt5.credentials_configured:
+        mt5: MT5Adapter | BridgeMT5Adapter = direct
+        monitor = MT5ConnectionMonitor(direct, config.mt5.reconnect_interval_seconds)
+        log.info("MT5 access mode: direct (Windows terminal detected)")
+    else:
+        mt5 = BridgeMT5Adapter(bridge_server)
+        log.info("MT5 access mode: bridge (this host cannot drive MT5 directly: %s)",
+                 "; ".join(direct.detection.notes) or "credentials not configured")
 
     if config.market_data.mode == "simulation":
         provider = SimulatedProvider()
@@ -71,6 +92,7 @@ def build_services(config: AresConfig) -> AppServices:
     else:
         provider = MT5Provider(mt5)
     market_data = MarketDataService(provider, config.market_data)
+    news = NewsService(config.news)
 
     risk = RiskEngine(config.risk)
     paper = PaperTradingEngine(market_data, risk, config.execution)
@@ -82,9 +104,10 @@ def build_services(config: AresConfig) -> AppServices:
     alerts = AlertManager()
     db = Database(config.system.database_url)
     command = CommandCenter(market_data, engine, scanner, paper, baskets,
-                            takeover, risk, calendar, provider=None)
+                            takeover, risk, calendar, provider=None, news=news)
     return AppServices(
-        config=config, mt5=mt5, mt5_monitor=monitor, market_data=market_data,
+        config=config, mt5=mt5, mt5_monitor=monitor, bridge=bridge_server,
+        news=news, market_data=market_data,
         engine=engine, scanner=scanner, risk=risk, paper=paper, baskets=baskets,
         takeover=takeover, calendar=calendar, alerts=alerts, db=db,
         command=command, ai_provider=None,
@@ -127,8 +150,6 @@ async def lifespan(app: FastAPI):
     )
 
     await svc.db.start()
-    await svc.mt5_monitor.start()          # truthful connect attempt + monitor
-    await svc.market_data.refresh_status()
     svc.market_data.broadcast = hub.broadcast
     svc.alerts.broadcast = hub.broadcast
 
@@ -140,8 +161,26 @@ async def lifespan(app: FastAPI):
         await svc.alerts.emit("connection", "info", "MT5 connection restored.")
         await svc.market_data.refresh_status()
 
-    svc.mt5_monitor.on_connection_lost = on_mt5_lost
-    svc.mt5_monitor.on_connection_restored = on_mt5_restored
+    if svc.mt5_monitor is not None:
+        await svc.mt5_monitor.start()      # direct Windows path: connect + monitor
+        svc.mt5_monitor.on_connection_lost = on_mt5_lost
+        svc.mt5_monitor.on_connection_restored = on_mt5_restored
+    else:
+        # Bridge path: the Windows bridge dials in, so publish the real
+        # "waiting for bridge" state now and react when it attaches/detaches.
+        svc.bridge.publish_status()
+
+        async def on_bridge_state(connected: bool) -> None:
+            if connected:
+                await svc.alerts.emit("connection", "info", "MT5 bridge connected.")
+            else:
+                await svc.alerts.emit("connection", "danger",
+                                      "MT5 bridge disconnected. Trading disabled.")
+            await svc.market_data.refresh_status()
+
+        svc.bridge.on_state_change = on_bridge_state
+
+    await svc.market_data.refresh_status()
 
     async def on_paper_update():
         await hub.broadcast({"type": "account", "data": svc.paper.account_snapshot()})
@@ -165,6 +204,7 @@ async def lifespan(app: FastAPI):
     svc.command.provider = svc.ai_provider
 
     await svc.market_data.start()
+    await svc.news.start()
     engine_task = asyncio.create_task(_periodic_engine_tick(svc), name="engine-tick")
 
     status_registry.set("websocket", ComponentState.DEGRADED, "No clients connected")
@@ -179,7 +219,9 @@ async def lifespan(app: FastAPI):
         except asyncio.CancelledError:
             pass
         await svc.market_data.stop()
-        await svc.mt5_monitor.stop()
+        await svc.news.stop()
+        if svc.mt5_monitor is not None:
+            await svc.mt5_monitor.stop()
         await svc.db.stop()
         log.info("ARES shutdown complete")
 
@@ -197,13 +239,58 @@ def create_app(config: AresConfig | None = None) -> FastAPI:
         allow_methods=["*"],
         allow_headers=["*"],
     )
+    app.add_middleware(AccessTokenMiddleware, settings=config.security)
     app.include_router(router)
 
     @app.websocket("/ws")
     async def websocket_endpoint(ws: WebSocket):
+        # Browsers cannot set headers on a WebSocket, so the token arrives as a
+        # query parameter when access control is enabled.
+        if config.security.access_token and not token_ok(
+            config.security, ws.query_params.get("access_token")
+        ):
+            await ws.close(code=4401, reason="unauthorized")
+            return
         await hub.serve(ws)
 
+    @app.websocket("/bridge/ws")
+    async def bridge_endpoint(ws: WebSocket):
+        """Inbound endpoint for the Windows MT5 bridge (its own token)."""
+        await app.state.services.bridge.serve(ws)
+
+    _mount_frontend(app, config)
     return app
+
+
+def _mount_frontend(app: FastAPI, config: AresConfig) -> None:
+    """Serve the built SPA so one process and one URL serve every device.
+
+    Missing build output is not an error: the API still runs and the reason is
+    logged, rather than shipping a half-broken page.
+    """
+    if not config.system.serve_frontend:
+        return
+    dist = Path(config.system.frontend_dist)
+    index = dist / "index.html"
+    if not index.is_file():
+        log.info("frontend build not found at %s — API-only mode "
+                 "(run 'npm run build' in ares/frontend)", dist)
+        return
+
+    assets = dist / "assets"
+    if assets.is_dir():
+        app.mount("/assets", StaticFiles(directory=str(assets)), name="assets")
+
+    @app.get("/{full_path:path}", include_in_schema=False)
+    async def spa(full_path: str):
+        # Serve real files (manifest, icons, service worker) as themselves;
+        # every other path falls back to the SPA entry point.
+        candidate = (dist / full_path).resolve()
+        if full_path and candidate.is_file() and str(candidate).startswith(str(dist.resolve())):
+            return FileResponse(candidate)
+        return FileResponse(index)
+
+    log.info("serving frontend from %s", dist)
 
 
 app = create_app()

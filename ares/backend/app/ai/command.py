@@ -92,7 +92,9 @@ class CommandCenter:
         risk: RiskEngine,
         calendar: EconomicCalendar,
         provider: AIProvider | None = None,
+        news=None,
     ) -> None:
+        self.news = news
         self.market_data = market_data
         self.engine = engine
         self.scanner = scanner
@@ -232,6 +234,40 @@ class CommandCenter:
                 reply += f" ({snapshot['mt5']['reason']})"
             reply += f". Market data: {md['state']} — {md['reason']}."
             return {"reply": reply, "data": {"status": snapshot}}
+
+        # ---- "what's moving X" / news-driven questions ---------------------------------
+        # "why is …" only counts when it names an instrument, so follow-ups like
+        # "why is your confidence that high?" still reach the confidence handler.
+        asks_about_drivers = any(
+            k in lower for k in ("what's moving", "whats moving", "what is moving",
+                                 "driving", "headlines")
+        ) or ("why is" in lower and symbol is not None)
+        if self.news is not None and asks_about_drivers and "confidence" not in lower:
+            articles = self.news.query(symbol=symbol, limit=5) if symbol else self.news.query(limit=5)
+            if articles:
+                lines = [
+                    f"• {a['source']} — {a['title']}\n  ARES read: {a['ares_impact']}"
+                    for a in articles
+                ]
+                subject = symbol or "the market"
+                reply = f"Latest headlines relevant to {subject}:\n" + "\n".join(lines)
+                if symbol:
+                    analysis = await self.engine.analyze(symbol)
+                    if analysis:
+                        self.remember(analysis)
+                        reply += (f"\n\nStructure read: {symbol} is {analysis['bias']} "
+                                  f"({analysis['timeframe_alignment']}), confidence "
+                                  f"{analysis['confidence']}/5.")
+                        return {"reply": reply, "analysis": analysis,
+                                "actions": [{"type": "set_symbol", "symbol": symbol}]}
+                return {"reply": reply, "data": {"news": articles},
+                        "actions": [{"type": "open_section", "section": "news"}]}
+            # No articles: fall through to structure-only answers rather than
+            # inventing a narrative.
+            if not symbol:
+                return {"reply": f"No news is available right now: "
+                                 f"{status_registry.get('news').reason} "
+                                 f"I can still analyze structure — name an instrument."}
 
         # ---- news / web intelligence ---------------------------------------------------
         if any(k in lower for k in ("news", "cpi", "nfp", "fomc", "rate decision")):

@@ -27,12 +27,20 @@ def test_health_and_status(client):
 
 
 def test_mt5_truthfully_offline(client):
+    """On a host that cannot drive MT5 directly, ARES reports the bridge path
+    as genuinely unattached — never a fake connection."""
     account = client.get("/api/account").json()
     mt5 = account["mt5"]
-    assert mt5["state"] in ("DISCONNECTED", "ERROR")
     assert mt5["account"] is None
-    detection = mt5["detection"]
-    assert detection["platform_supported"] is False or detection["package_available"] is False
+    assert mt5["mode"] == "bridge"
+    assert mt5["attached"] is False
+    assert mt5["connected"] is False
+    assert mt5["state"] in ("DISCONNECTED", "AUTHENTICATION REQUIRED", "DISABLED")
+
+    bridge = client.get("/api/bridge").json()
+    assert bridge["access_mode"] == "bridge"
+    assert bridge["connected"] is False
+    assert "MT5_BRIDGE" in bridge["instructions"] or "bridge" in bridge["instructions"]
 
 
 def test_market_and_candles(client):

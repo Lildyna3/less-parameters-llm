@@ -87,6 +87,37 @@ class AISettings(BaseModel):
 class NewsSettings(BaseModel):
     web_intelligence_enabled: bool = False
     calendar_warning_window_minutes: int = 30
+    # Live RSS news ingestion. Requires outbound HTTPS to the news hosts; when
+    # egress is blocked ARES reports the feed OFFLINE instead of inventing news.
+    news_feed_enabled: bool = True
+    refresh_interval_seconds: int = 300
+    fetch_timeout_seconds: float = 12.0
+    max_articles: int = 300
+
+
+class BridgeSettings(BaseModel):
+    """Windows MT5 bridge. The bridge process connects OUT to this backend over
+    an authenticated WebSocket, so the Linux/cloud host never needs the
+    Windows-only MetaTrader5 package."""
+
+    enabled: bool = True
+    # Shared secret the bridge presents on connect. Empty = bridge refused.
+    token: str | None = None
+    heartbeat_interval_seconds: float = 15.0
+    # A bridge that misses this many seconds of heartbeats is considered gone.
+    stale_after_seconds: float = 45.0
+    request_timeout_seconds: float = 20.0
+
+
+class SecuritySettings(BaseModel):
+    """Optional access control for the deployed web app. When an access token
+    is configured, API and WebSocket clients must present it. The token lives
+    only in the server environment and the browser's local storage — it is
+    never baked into the frontend bundle."""
+
+    access_token: str | None = None
+    # Paths always reachable without a token (health/status for uptime checks).
+    public_paths: list[str] = Field(default_factory=lambda: ["/api/health"])
 
 
 class SystemSettings(BaseModel):
@@ -97,6 +128,10 @@ class SystemSettings(BaseModel):
     cors_origins: list[str] = Field(
         default_factory=lambda: ["http://localhost:5173", "http://127.0.0.1:5173"]
     )
+    # In production the backend serves the built frontend from this directory,
+    # so one process and one URL serve phone, laptop and desktop alike.
+    serve_frontend: bool = True
+    frontend_dist: str = str(PROJECT_DIR / "frontend" / "dist")
 
 
 class AresConfig(BaseSettings):
@@ -120,6 +155,8 @@ class AresConfig(BaseSettings):
     takeover: TakeoverSettings = Field(default_factory=TakeoverSettings)
     ai: AISettings = Field(default_factory=AISettings)
     news: NewsSettings = Field(default_factory=NewsSettings)
+    bridge: BridgeSettings = Field(default_factory=BridgeSettings)
+    security: SecuritySettings = Field(default_factory=SecuritySettings)
     system: SystemSettings = Field(default_factory=SystemSettings)
 
     def model_post_init(self, __context) -> None:
@@ -138,6 +175,11 @@ class AresConfig(BaseSettings):
             self.mt5.server = os.environ["MT5_SERVER"]
         if os.getenv("MT5_PATH"):
             self.mt5.path = os.environ["MT5_PATH"]
+        # Conventional names for the bridge/access secrets.
+        if os.getenv("ARES_BRIDGE_TOKEN"):
+            self.bridge.token = os.environ["ARES_BRIDGE_TOKEN"]
+        if os.getenv("ARES_ACCESS_TOKEN"):
+            self.security.access_token = os.environ["ARES_ACCESS_TOKEN"]
         # Same convenience for AI keys.
         if os.getenv("GEMINI_API_KEY") and self.ai.provider == "gemini":
             self.ai.api_key = self.ai.api_key or os.environ["GEMINI_API_KEY"]
