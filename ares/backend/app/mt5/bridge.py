@@ -50,6 +50,11 @@ class BridgeInfo:
 
     bridge_version: str = ""
     host: str = ""
+    platform: str = ""
+    # True only when the peer reports the real Windows MetaTrader5 package.
+    # A protocol test client reports False, and ARES must never present it as
+    # a live terminal.
+    mt5_package: bool = False
     terminal_connected: bool = False
     terminal_path: str | None = None
     broker: str | None = None
@@ -63,6 +68,8 @@ class BridgeInfo:
         return {
             "bridge_version": self.bridge_version,
             "host": self.host,
+            "platform": self.platform,
+            "mt5_package": self.mt5_package,
             "terminal_connected": self.terminal_connected,
             "terminal_path": self.terminal_path,
             "broker": self.broker,
@@ -109,9 +116,14 @@ class MT5BridgeServer:
 
     def publish_status(self) -> None:
         payload = self.status_payload()
-        if self.connected:
+        if self.verified_real_terminal:
             status_registry.set("mt5", ComponentState.ONLINE,
                                 f"Connected via Windows bridge ({self.info.host})", payload)
+        elif self.connected:
+            status_registry.set(
+                "mt5", ComponentState.DEGRADED,
+                f"A peer is attached from {self.info.host} but reports no MetaTrader5 "
+                "package, so this is not a verified MT5 terminal.", payload)
         elif self.attached:
             status_registry.set(
                 "mt5", ComponentState.DEGRADED,
@@ -124,6 +136,88 @@ class MT5BridgeServer:
             )
             status_registry.set("mt5", ComponentState.OFFLINE, reason, payload)
 
+    @property
+    def verified_real_terminal(self) -> bool:
+        """True only when a Windows peer with the real MetaTrader5 package says
+        its terminal is live. A protocol test client can never satisfy this."""
+        return (self.connected and self.info.mt5_package
+                and self.info.platform.lower().startswith("windows"))
+
+    def chain(self) -> list[dict]:
+        """Every link in the path to the broker, reported separately.
+
+        The four states must never be collapsed into one generic "Connected":
+        the backend can be up while the bridge is absent, the bridge can be
+        attached while the terminal is closed, and the terminal can be running
+        while the broker link is down. Each row says which of those is true.
+        """
+        # 1. This backend process is answering, by definition.
+        links = [{
+            "id": "backend", "label": "ARES backend", "state": "ONLINE",
+            "detail": "This process is serving the API.",
+        }]
+
+        # 2. The Windows bridge channel.
+        if not self.settings.token:
+            bridge_state, bridge_detail = "OFFLINE", (
+                "No ARES_BRIDGE_TOKEN configured on this server, so no bridge can attach.")
+        elif self.attached:
+            if self.info.mt5_package and self.info.platform.lower().startswith("windows"):
+                bridge_state = "ONLINE"
+                bridge_detail = f"{self.info.host} · bridge v{self.info.bridge_version}"
+            else:
+                # Honest about a peer that cannot actually reach a terminal.
+                bridge_state = "DEGRADED"
+                bridge_detail = (
+                    f"{self.info.host} attached, but it reports no MetaTrader5 package"
+                    f" (platform: {self.info.platform or 'unknown'}). This is a protocol"
+                    " test client, not a live MT5 bridge.")
+        else:
+            bridge_state, bridge_detail = "OFFLINE", (
+                "No bridge attached. Start the ARES MT5 bridge on your Windows machine.")
+        links.append({"id": "bridge", "label": "Windows bridge",
+                      "state": bridge_state, "detail": bridge_detail})
+
+        # 3. The MetaTrader 5 terminal itself.
+        reported = self.info.mt5_state.upper()
+        if not self.attached:
+            terminal_state, terminal_detail = "UNKNOWN", (
+                "Cannot be known until a bridge attaches.")
+        elif reported in ("TERMINAL_NOT_RUNNING", "MT5_TERMINAL_NOT_RUNNING"):
+            terminal_state, terminal_detail = "OFFLINE", (
+                self.info.detail or "The bridge could not initialize the terminal.")
+        elif reported in ("AUTH_REQUIRED", "AUTHENTICATION_REQUIRED"):
+            terminal_state, terminal_detail = "OFFLINE", (
+                self.info.detail or "The terminal rejected the configured login.")
+        elif not self.info.mt5_package:
+            terminal_state, terminal_detail = "UNVERIFIED", (
+                "The attached peer has no MetaTrader5 package, so no real terminal "
+                "is behind this connection.")
+        elif reported in ("CONNECTED", "BROKER_DISCONNECTED"):
+            terminal_state = "ONLINE"
+            terminal_detail = self.info.terminal_path or "Terminal initialized."
+        else:
+            terminal_state, terminal_detail = "UNKNOWN", (self.info.detail or reported)
+        links.append({"id": "terminal", "label": "MT5 terminal",
+                      "state": terminal_state, "detail": terminal_detail})
+
+        # 4. The broker link behind the terminal.
+        if terminal_state != "ONLINE":
+            broker_state, broker_detail = "UNKNOWN", (
+                "Cannot be known until the terminal is running.")
+        elif reported == "BROKER_DISCONNECTED":
+            broker_state, broker_detail = "OFFLINE", (
+                self.info.detail or "The terminal is running but the broker link is down.")
+        elif self.account is not None:
+            broker_state = "ONLINE"
+            broker_detail = (f"{self.account.broker} · {self.account.server} · "
+                             f"{'DEMO' if self.account.is_demo else 'NOT VERIFIED AS DEMO'}")
+        else:
+            broker_state, broker_detail = "UNKNOWN", "No account information received yet."
+        links.append({"id": "broker", "label": "Broker",
+                      "state": broker_state, "detail": broker_detail})
+        return links
+
     def status_payload(self) -> dict:
         return {
             "mode": "bridge",
@@ -135,6 +229,8 @@ class MT5BridgeServer:
             "last_error": self.last_error,
             "connected_since": self.connected_since.isoformat() if self.connected_since else None,
             "token_configured": bool(self.settings.token),
+            "verified_real_terminal": self.verified_real_terminal,
+            "chain": self.chain(),
         }
 
     @property
@@ -158,6 +254,11 @@ class MT5BridgeServer:
         if reported == "CONNECTING":
             return "CONNECTING"
         if self.info.terminal_connected:
+            # A peer without the MetaTrader5 package cannot have a real
+            # terminal behind it, whatever it claims. Saying CONNECTED here
+            # would collapse four different states into one falsehood.
+            if not self.verified_real_terminal:
+                return "UNVERIFIED — NOT A REAL MT5 TERMINAL"
             return "CONNECTED"
         return "ERROR"
 
@@ -198,6 +299,8 @@ class MT5BridgeServer:
         self.info = BridgeInfo(
             bridge_version=str(hello.get("bridge_version", "unknown")),
             host=str(hello.get("host", "unknown")),
+            platform=str(hello.get("platform", "unknown")),
+            mt5_package=bool(hello.get("mt5_package", False)),
             terminal_path=hello.get("terminal_path"),
             mt5_state=str(hello.get("mt5_state", "CONNECTING")),
             detail=str(hello.get("detail", "")),

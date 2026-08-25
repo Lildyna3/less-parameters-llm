@@ -73,12 +73,55 @@ function Connections() {
         </span>
       </Row>
 
+      {/* The path to the broker, link by link. Each is reported on its own so
+          a live bridge is never mistaken for a live terminal, or a running
+          terminal for a working broker connection. */}
+      <div className="border-b border-line px-4 py-3">
+        <div className="label">Connection path</div>
+        <div className="mt-2.5 space-y-2">
+          {bridge.chain.map((link, index) => (
+            <div key={link.id} className="flex items-start gap-2.5">
+              <span className="flex w-4 shrink-0 flex-col items-center pt-[5px]">
+                <Dot state={link.state === "ONLINE" ? "ONLINE"
+                  : link.state === "DEGRADED" ? "DEGRADED" : "OFFLINE"} />
+                {index < bridge.chain.length - 1 && (
+                  <span className="mt-1 h-4 w-px bg-line-strong" />
+                )}
+              </span>
+              <span className="min-w-0 flex-1">
+                <span className="flex items-center gap-2">
+                  <span className="text-[12px] text-ink">{link.label}</span>
+                  <Tag tone={
+                    link.state === "ONLINE" ? "bull"
+                      : link.state === "OFFLINE" ? "muted"
+                      : link.state === "DEGRADED" || link.state === "UNVERIFIED" ? "warn"
+                      : "muted"
+                  }>
+                    {link.state}
+                  </Tag>
+                </span>
+                <span className="mt-0.5 block text-[10.5px] leading-relaxed text-faint">
+                  {link.detail}
+                </span>
+              </span>
+            </div>
+          ))}
+        </div>
+        {bridge.attached && !bridge.verified_real_terminal && (
+          <p className="mt-3 text-[10.5px] leading-relaxed text-warn">
+            This connection has not been verified against a real MetaTrader 5 terminal.
+            ARES will not present it as live MT5 data.
+          </p>
+        )}
+      </div>
+
       {bridge.attached && (
         <>
           <Row label="Bridge host" hint={`bridge v${bridge.bridge.bridge_version}`}>
             <span className="num text-[11.5px] text-dim">{bridge.bridge.host}</span>
           </Row>
-          <Row label="Terminal state">
+          <Row label="Terminal state (as reported by the peer)"
+               hint="ARES shows this verbatim; the connection path above is what it has actually verified.">
             <span className="num text-[11.5px] text-dim">{bridge.bridge.mt5_state}</span>
           </Row>
           {bridge.bridge.detail && (

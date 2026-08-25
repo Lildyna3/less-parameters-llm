@@ -298,6 +298,8 @@ export interface BridgeStatus {
   bridge: {
     bridge_version: string;
     host: string;
+    platform: string;
+    mt5_package: boolean;
     terminal_connected: boolean;
     terminal_path: string | null;
     broker: string | null;
@@ -312,6 +314,17 @@ export interface BridgeStatus {
   last_error: string | null;
   connected_since: string | null;
   token_configured: boolean;
+  verified_real_terminal: boolean;
+  chain: ChainLink[];
   access_mode: string;
   instructions: string;
+}
+
+/** One link in the path from this backend to the broker. Reported separately
+    so "connected" can never mean four different things at once. */
+export interface ChainLink {
+  id: "backend" | "bridge" | "terminal" | "broker";
+  label: string;
+  state: "ONLINE" | "OFFLINE" | "DEGRADED" | "UNKNOWN" | "UNVERIFIED";
+  detail: string;
 }

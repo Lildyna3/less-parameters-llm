@@ -35,9 +35,12 @@ def client(bridge_config):
 
 
 def hello(**overrides) -> str:
+    """A handshake from a real Windows bridge by default. Tests that model a
+    protocol test client override platform/mt5_package explicitly."""
     payload = {
         "type": "hello", "token": BRIDGE_TOKEN, "bridge_version": "1.0.0",
-        "host": "WIN-TEST (Windows 11)", "terminal_connected": True,
+        "host": "WIN-TEST (Windows 11)", "platform": "Windows", "mt5_package": True,
+        "terminal_connected": True,
         "mt5_state": "CONNECTED", "detail": "", "terminal_path": r"C:\MT5\terminal64.exe",
     }
     payload.update(overrides)
@@ -265,3 +268,98 @@ def test_spa_route_refuses_path_traversal(tmp_path):
 
         # Unknown routes are the SPA, so client-side deep links work.
         assert "ARES" in client.get("/news").text
+
+
+# -- runtime honesty: sandbox vs Windows vs terminal vs broker ----------------
+
+def _chain(client) -> dict:
+    return {link["id"]: link for link in client.get("/api/bridge").json()["chain"]}
+
+
+def test_chain_reports_each_link_separately_with_no_bridge(client):
+    """The four states must never collapse into one generic 'connected'."""
+    links = _chain(client)
+    assert list(links) == ["backend", "bridge", "terminal", "broker"]
+    assert links["backend"]["state"] == "ONLINE"      # this process answers
+    assert links["bridge"]["state"] == "OFFLINE"      # nothing attached
+    assert links["terminal"]["state"] == "UNKNOWN"    # unknowable without a bridge
+    assert links["broker"]["state"] == "UNKNOWN"
+    assert "Cannot be known" in links["terminal"]["detail"]
+
+
+def test_test_client_is_never_presented_as_a_live_terminal(client):
+    """A protocol test client (no MetaTrader5 package) may attach, but ARES
+    must not claim a real MT5 terminal is behind it."""
+    with client.websocket_connect("/bridge/ws") as ws:
+        ws.send_text(hello(platform="Linux", mt5_package=False))
+        ws.receive_text()
+
+        status = client.get("/api/bridge").json()
+        assert status["attached"] is True
+        assert status["verified_real_terminal"] is False
+
+        links = _chain(client)
+        assert links["bridge"]["state"] == "DEGRADED"
+        assert "test client" in links["bridge"]["detail"].lower()
+        assert links["terminal"]["state"] == "UNVERIFIED"
+        assert "no MetaTrader5 package" in links["terminal"]["detail"]
+
+
+def test_real_windows_bridge_is_verified(client):
+    """A Windows peer reporting the MetaTrader5 package, a live terminal and an
+    account is the only thing that counts as verified."""
+    with client.websocket_connect("/bridge/ws") as ws:
+        ws.send_text(hello(platform="Windows", mt5_package=True))
+        ws.receive_text()
+        ws.send_text(json.dumps({
+            "type": "heartbeat", "terminal_connected": True, "mt5_state": "CONNECTED",
+            "detail": "", "broker": "Test Broker", "server": "Test-Demo",
+            "account": {"login": 12345678, "broker": "Test Broker", "server": "Test-Demo",
+                        "currency": "USD", "balance": 10000.0, "equity": 10050.0,
+                        "margin_free": 9000.0, "leverage": 100, "trade_allowed": True,
+                        "is_demo": True},
+        }))
+        status = client.get("/api/bridge").json()
+        assert status["verified_real_terminal"] is True
+
+        links = _chain(client)
+        assert links["bridge"]["state"] == "ONLINE"
+        assert links["terminal"]["state"] == "ONLINE"
+        assert links["broker"]["state"] == "ONLINE"
+        assert "DEMO" in links["broker"]["detail"]
+
+
+def test_terminal_up_but_broker_down_is_distinguished(client):
+    """A running terminal with a dead broker link is its own state, not
+    'connected' and not 'terminal not running'."""
+    with client.websocket_connect("/bridge/ws") as ws:
+        ws.send_text(hello(platform="Windows", mt5_package=True,
+                           terminal_connected=False, mt5_state="BROKER_DISCONNECTED",
+                           detail="authenticated but no tick could be retrieved"))
+        ws.receive_text()
+        links = _chain(client)
+        assert links["bridge"]["state"] == "ONLINE"     # the bridge itself is fine
+        assert links["terminal"]["state"] == "ONLINE"   # the terminal is running
+        assert links["broker"]["state"] == "OFFLINE"    # but the broker link is not
+        assert client.get("/api/bridge").json()["verified_real_terminal"] is False
+
+
+def test_undeclared_peer_is_not_called_connected(client):
+    """A peer that does not declare the MetaTrader5 package must not surface as
+    CONNECTED anywhere — not in the headline state, not in the status registry."""
+    with client.websocket_connect("/bridge/ws") as ws:
+        ws.send_text(json.dumps({
+            "type": "hello", "token": BRIDGE_TOKEN, "bridge_version": "1.0.0",
+            "host": "MYSTERY-PEER", "terminal_connected": True,
+            "mt5_state": "CONNECTED", "detail": "",
+        }))
+        ws.receive_text()
+
+        status = client.get("/api/bridge").json()
+        assert status["state"] != "CONNECTED"
+        assert "UNVERIFIED" in status["state"]
+        assert status["verified_real_terminal"] is False
+
+        mt5 = client.get("/api/health").json()["components"]["mt5"]
+        assert mt5["state"] != "ONLINE"
+        assert "no MetaTrader5" in mt5["reason"]

@@ -271,6 +271,10 @@ async def run_once(url: str, token: str, session: TerminalSession) -> None:
             "token": token,
             "bridge_version": BRIDGE_VERSION,
             "host": f"{socket.gethostname()} ({platform.system()} {platform.release()})",
+            # ARES uses these to tell a real Windows bridge apart from a
+            # protocol test client. Report them honestly.
+            "platform": platform.system(),
+            "mt5_package": mt5 is not None,
             "terminal_path": session.path,
             "terminal_connected": session.state == "CONNECTED",
             "mt5_state": session.state,

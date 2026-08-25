@@ -16,6 +16,19 @@ autonomous execution — reachable from your phone and laptop at one URL.
 
 ## Quick start
 
+**On Windows** (the machine that can reach MetaTrader 5) — full guide in
+[docs/WINDOWS.md](docs/WINDOWS.md):
+
+```powershell
+cd ares
+Copy-Item .env.example .env                                              # fill in locally; never commit
+powershell -ExecutionPolicy Bypass -File .\scripts\Preflight-Ares.ps1   # audit, changes nothing
+powershell -ExecutionPolicy Bypass -File .\scripts\Start-Ares.ps1       # start + verify over HTTP
+powershell -ExecutionPolicy Bypass -File .\scripts\Verify-MT5.ps1       # the ten MT5 tests
+```
+
+**On Linux/macOS or a server:**
+
 ```bash
 cd ares
 cp .env.example .env          # fill in locally; never commit
@@ -30,6 +43,19 @@ docker compose up -d --build  # production: one process, one URL
 
 Open `http://localhost:8000` (or `http://<lan-ip>:8000` from your phone).
 Deployment, HTTPS and PWA install: [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md).
+
+### Two runtimes, one system
+
+ARES has two distinct places it runs, and they are not interchangeable:
+
+| Runtime | Where | Provides |
+|---|---|---|
+| **Windows Surface** | your machine, beside MetaTrader 5 | the MT5 connectivity layer (bridge + terminal + broker) |
+| **Public web app** | a cloud host, or the same Windows machine | the interface and API your phone and laptop reach |
+
+The Windows bridge dials out to whichever backend you point it at, so the two
+can be the same process on your Surface, or split between a cloud backend and
+your Surface at home.
 
 Without a broker connection, `--sim` / `ARES_MARKET_DATA__MODE=simulation`
 gives a labelled simulated feed for exploring the system. Every simulated
