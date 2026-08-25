@@ -8,7 +8,7 @@ import { api } from "../lib/api";
 import { useAres } from "../store";
 import type { Analysis, Candle, Position } from "../lib/types";
 
-const TIMEFRAMES = ["M1", "M5", "M15", "M30", "H1", "H4", "D1"];
+const TIMEFRAMES = ["M1", "M5", "M15", "M30", "H1", "H4", "D1", "W1"];
 
 function chartColors(dark: boolean) {
   const css = getComputedStyle(document.documentElement);
@@ -37,6 +37,7 @@ export default function PriceChart({ height }: { height?: number }) {
   const markersRef = useRef<ISeriesMarkersPluginApi<Time> | null>(null);
   const priceLinesRef = useRef<IPriceLine[]>([]);
   const lastCandleRef = useRef<Candle | null>(null);
+  const firstCandleTimeRef = useRef<number>(0);
   const [positions, setPositions] = useState<Position[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [source, setSource] = useState<string | null>(null);
@@ -93,6 +94,7 @@ export default function PriceChart({ height }: { height?: number }) {
           })),
         );
         lastCandleRef.current = data.candles[data.candles.length - 1] ?? null;
+        firstCandleTimeRef.current = data.candles[0]?.time ?? 0;
         chartRef.current?.timeScale().fitContent();
       })
       .catch((err: Error) => {
@@ -164,14 +166,21 @@ export default function PriceChart({ height }: { height?: number }) {
         price: p.tp, color: "#2dd4a0", lineWidth: 1, lineStyle: 2, title: "TP",
       }));
     }
+    const lastTime = lastCandleRef.current?.time ?? 0;
     markersRef.current?.setMarkers(
-      positions.map((p) => ({
-        time: (lastCandleRef.current?.time ?? 0) as UTCTimestamp,
-        position: p.direction === "buy" ? "belowBar" : "aboveBar",
-        color: p.direction === "buy" ? "#2dd4a0" : "#f87171",
-        shape: p.direction === "buy" ? "arrowUp" : "arrowDown",
-        text: p.id.split("-")[0],
-      })),
+      positions.map((p) => {
+        // Place the marker at the actual entry time, clamped into the
+        // loaded candle range so it stays visible on every timeframe.
+        const entryTime = Math.floor(Date.parse(p.opened_at) / 1000) || lastTime;
+        const clamped = Math.min(Math.max(entryTime, firstCandleTimeRef.current), lastTime);
+        return {
+          time: clamped as UTCTimestamp,
+          position: p.direction === "buy" ? "belowBar" as const : "aboveBar" as const,
+          color: p.direction === "buy" ? "#2dd4a0" : "#f87171",
+          shape: p.direction === "buy" ? "arrowUp" as const : "arrowDown" as const,
+          text: p.id.split("-")[0],
+        };
+      }),
     );
   }, [analysis, positions, symbol]);
 

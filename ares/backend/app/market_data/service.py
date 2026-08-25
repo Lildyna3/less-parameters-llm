@@ -30,6 +30,8 @@ class MarketDataService:
         self.watched_symbols: list[str] = list(settings.default_symbols)
         self.latest_ticks: dict[str, dict] = {}
         self._prev_day_close: dict[str, float] = {}
+        self._daily_refs_checked_at: float = -3600.0
+        self._daily_refs_failed: set[str] = set()
         self._candle_cache: dict[tuple[str, str, int], tuple[float, list[dict]]] = {}
         self._symbols_cache: tuple[float, list[dict]] | None = None
         self._task: asyncio.Task | None = None
@@ -71,6 +73,7 @@ class MarketDataService:
                 await asyncio.sleep(self.settings.tick_interval_seconds)
                 if not await self.provider.available():
                     continue
+                await self._ensure_daily_references()
                 updates = []
                 for symbol in self.watched_symbols:
                     tick = await self.provider.get_tick(symbol)
@@ -84,6 +87,30 @@ class MarketDataService:
                 raise
             except Exception as exc:  # noqa: BLE001
                 log.error("tick loop error: %s", exc)
+
+    async def _ensure_daily_references(self) -> None:
+        """Load previous-day closes for watched symbols so change/change_percent
+        populate without anyone opening a D1 chart. Refreshed hourly; at most a
+        few symbols per tick to keep the loop responsive."""
+        now = time.monotonic()
+        if now - self._daily_refs_checked_at < 3600:
+            return
+        missing = [s for s in self.watched_symbols if s not in self._prev_day_close][:4]
+        if not missing:
+            self._daily_refs_checked_at = now
+            return
+        for symbol in missing:
+            candles = await self.provider.get_candles(symbol, "D1", 3)
+            if len(candles) >= 2:
+                self._prev_day_close[symbol] = candles[-2]["close"]
+            else:
+                # Provider has no D1 for this symbol; don't retry every tick.
+                self._daily_refs_failed.add(symbol)
+        if all(
+            s in self._prev_day_close or s in self._daily_refs_failed
+            for s in self.watched_symbols
+        ):
+            self._daily_refs_checked_at = now
 
     def _change_stats(self, symbol: str, tick: dict) -> dict:
         ref = self._prev_day_close.get(symbol)

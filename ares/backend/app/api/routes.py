@@ -147,7 +147,7 @@ async def analyze(body: AnalyzeRequest, request: Request):
     analysis = await svc.engine.analyze(body.symbol.upper(), news_risk=news is not None)
     if analysis is None:
         raise HTTPException(503, detail="DATA SOURCE OFFLINE — cannot analyze without market data")
-    svc.command.last_analysis[body.symbol.upper()] = analysis
+    svc.command.remember(analysis)
     return {"analysis": analysis, "news_warning": news}
 
 

@@ -21,7 +21,7 @@ building, and all installs completed normally.
 | 12 | Trade journal + analytics + coaching | **COMPLETE** | SQLite journal, behavior-based coach, analytics dashboard |
 | 13 | Takeover Mode | **COMPLETE** | Request→explicit authorize→hard-capped execution→auto shutdown; baskets; instant stop |
 | 14 | Performance | **COMPLETE** | TTL caches, one WS, memoized store updates, mounted sections, ~130 KB gzip bundle |
-| 15 | Security + testing | **COMPLETE** | .env-only secrets, log redaction, masked account, 58 backend tests + tsc build + Playwright smoke |
+| 15 | Security + testing | **COMPLETE** | .env-only secrets, log redaction, masked account, 62 backend tests + 14 vitest component/store tests + tsc build + Playwright smoke |
 | 16 | Final polish | **COMPLETE** | Light theme, mobile layout, docs, one-command launcher |
 
 ## Known limitations
@@ -31,12 +31,9 @@ building, and all installs completed normally.
 - Paper P/L converts quote-currency P/L 1:1 to the account currency
   (JPY pairs adjusted); good enough for demo metrics, not broker-exact.
 - Economic calendar has no live feed; web intelligence has no provider.
-- Frontend automated tests are limited to type-checked builds + Playwright
-  smoke flows; no component-level unit suite yet.
 
 ## Next steps
 
 1. Exercise the MT5 layer on a Windows demo account end-to-end.
 2. Wire a licensed calendar/news feed and a web-research provider.
-3. Add vitest component tests for CommandCenter, PriceChart, TakeoverPanel.
-4. PostgreSQL profile + deployment hardening for multi-user use.
+3. PostgreSQL profile + deployment hardening for multi-user use.

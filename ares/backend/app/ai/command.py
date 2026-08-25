@@ -93,6 +93,13 @@ class CommandCenter:
         self.calendar = calendar
         self.provider = provider
         self.last_analysis: dict[str, dict] = {}
+        self.previous_analysis: dict[str, dict] = {}
+
+    def remember(self, analysis: dict) -> None:
+        symbol = analysis["symbol"]
+        if symbol in self.last_analysis:
+            self.previous_analysis[symbol] = self.last_analysis[symbol]
+        self.last_analysis[symbol] = analysis
 
     def _extract_symbol(self, text: str) -> str | None:
         m = _SYMBOL_RE.search(text)
@@ -234,11 +241,42 @@ class CommandCenter:
             a1, a2 = await self.engine.analyze(s1), await self.engine.analyze(s2)
             if not a1 or not a2:
                 return {"reply": "I can't compare those — DATA SOURCE OFFLINE for at least one symbol."}
-            self.last_analysis[s1], self.last_analysis[s2] = a1, a2
+            self.remember(a1)
+            self.remember(a2)
             reply = (f"{s1}: {a1['bias']} ({a1['timeframe_alignment']}), confidence {a1['confidence']}/5.\n"
                      f"{s2}: {a2['bias']} ({a2['timeframe_alignment']}), confidence {a2['confidence']}/5.\n"
                      f"Stronger evidence: {s1 if a1['confidence'] >= a2['confidence'] else s2}.")
             return {"reply": reply, "data": {"analyses": [a1, a2]}}
+
+        # ---- "what changed?" — diff a fresh analysis against the previous one ----------------
+        if "what changed" in lower or "what's changed" in lower or "whats changed" in lower:
+            target = symbol or (list(self.last_analysis)[-1] if self.last_analysis else None)
+            if target is None or target not in self.last_analysis:
+                return {"reply": "Nothing to compare yet — run an analysis first (e.g. “Analyze EURUSD”)."}
+            baseline = self.last_analysis[target]
+            fresh = await self.engine.analyze(target)
+            if fresh is None:
+                return {"reply": f"Can't re-analyze {target} — DATA SOURCE OFFLINE."}
+            self.remember(fresh)
+            changes: list[str] = []
+            if fresh["bias"] != baseline["bias"]:
+                changes.append(f"bias shifted {baseline['bias']} → {fresh['bias']}")
+            if fresh["confidence"] != baseline["confidence"]:
+                changes.append(f"confidence {baseline['confidence']}/5 → {fresh['confidence']}/5")
+            if fresh["timeframe_alignment"] != baseline["timeframe_alignment"]:
+                changes.append(
+                    f"alignment {baseline['timeframe_alignment']} → {fresh['timeframe_alignment']}")
+            old_event = baseline["timeframes"]["M15"]["last_structure_event"]
+            new_event = fresh["timeframes"]["M15"]["last_structure_event"]
+            if new_event and new_event != old_event:
+                changes.append(f"new M15 {new_event['kind']} {new_event['direction']} at {new_event['level']}")
+            if baseline.get("price"):
+                move = fresh["price"] - baseline["price"]
+                pct = move / baseline["price"] * 100
+                changes.append(
+                    f"price {move:+.5g} ({pct:+.3f}%) since the last read at {baseline['generated_at']}")
+            body = "\n".join(f"• {c}" for c in changes) if changes else "• no material change"
+            return {"reply": f"{target} since your last analysis:\n{body}", "analysis": fresh}
 
         # ---- follow-up questions about the last analysis ------------------------------------
         if not symbol and self.last_analysis and any(
@@ -267,7 +305,7 @@ class CommandCenter:
             if analysis is None:
                 return {"reply": f"I can't analyze {symbol} right now — DATA SOURCE OFFLINE. "
                                  f"{status_registry.get('market_data').reason}"}
-            self.last_analysis[symbol] = analysis
+            self.remember(analysis)
             reply = await self._narrate(analysis, text)
             return {"reply": reply, "analysis": analysis,
                     "actions": [{"type": "set_symbol", "symbol": symbol}]}
@@ -283,7 +321,7 @@ class CommandCenter:
         analysis = await self.engine.analyze(symbol)
         if analysis is None:
             return {"reply": f"Can't build a takeover plan for {symbol} — DATA SOURCE OFFLINE."}
-        self.last_analysis[symbol] = analysis
+        self.remember(analysis)
         if analysis["confidence"] < 4 or analysis["bias"] == "neutral":
             return {"reply": (f"Not requesting takeover: {symbol} evidence is only "
                               f"{analysis['confidence']}/5 ({analysis['bias']}). "
