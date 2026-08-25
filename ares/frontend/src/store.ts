@@ -37,8 +37,17 @@ interface AresState {
   applyActions: (actions?: CommandAction[]) => void;
 }
 
+function readStoredFavorites(): string[] {
+  // Corrupt localStorage must never white-screen the app at module load.
+  try {
+    const parsed: unknown = JSON.parse(localStorage.getItem("ares.favorites") ?? "null");
+    if (Array.isArray(parsed) && parsed.every((v) => typeof v === "string")) return parsed;
+  } catch { /* fall through to defaults */ }
+  return ["EURUSD", "XAUUSD", "GBPUSD"];
+}
+
 const storedTheme = (localStorage.getItem("ares.theme") as "dark" | "light") || "dark";
-const storedFavs: string[] = JSON.parse(localStorage.getItem("ares.favorites") || '["EURUSD","XAUUSD","GBPUSD"]');
+const storedFavs: string[] = readStoredFavorites();
 
 export const useAres = create<AresState>((set, get) => ({
   theme: storedTheme,

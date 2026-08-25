@@ -191,11 +191,31 @@ export interface CalendarEvent {
   actual: string | null;
 }
 
-export interface JournalEntry extends Trade {
+export interface JournalEntry {
+  id: number; // database id (used for notes updates)
   trade_id: string;
+  symbol: string;
+  direction: string;
+  volume: number;
+  entry: number;
+  exit: number;
+  sl: number | null;
+  tp: number | null;
+  pl: number;
+  opened_at: string;
+  closed_at: string;
+  close_reason: string;
+  strategy: string | null;
+  confidence: number | null;
   result: string;
   market_conditions: Record<string, string> | null;
   notes: string | null;
+}
+
+export interface SymbolInfo {
+  name: string;
+  description: string;
+  digits: number;
 }
 
 export type Section =

@@ -75,14 +75,16 @@ class PriceAlertBody(BaseModel):
 
 
 class RiskUpdateBody(BaseModel):
-    max_daily_loss: float | None = None
-    max_drawdown_percent: float | None = None
-    max_open_positions: int | None = None
-    max_exposure_lots: float | None = None
-    max_trades_per_session: int | None = None
-    max_position_size_lots: float | None = None
-    max_spread_points: float | None = None
-    cooldown_seconds_after_loss: float | None = None
+    # Bounds keep the risk engine coherent: zero/negative limits would either
+    # disable protection or block every order with a misleading reason.
+    max_daily_loss: float | None = Field(default=None, gt=0)
+    max_drawdown_percent: float | None = Field(default=None, gt=0, le=100)
+    max_open_positions: int | None = Field(default=None, ge=1)
+    max_exposure_lots: float | None = Field(default=None, gt=0)
+    max_trades_per_session: int | None = Field(default=None, ge=1)
+    max_position_size_lots: float | None = Field(default=None, gt=0)
+    max_spread_points: float | None = Field(default=None, gt=0)
+    cooldown_seconds_after_loss: float | None = Field(default=None, ge=0)
 
 
 # ---- system --------------------------------------------------------------------
@@ -116,6 +118,39 @@ async def symbols(request: Request):
         return {"symbols": [], "source": None,
                 "message": "DATA SOURCE OFFLINE — no symbols available"}
     return {"symbols": data, "source": svc.market_data.source_label}
+
+
+@router.get("/watchlist")
+async def watchlist(request: Request):
+    svc = services(request)
+    return {"symbols": svc.market_data.watched_symbols}
+
+
+@router.post("/watchlist/{symbol}")
+async def watchlist_add(symbol: str, request: Request):
+    svc = services(request)
+    symbol = symbol.upper()
+    if symbol in svc.market_data.watched_symbols:
+        return {"symbols": svc.market_data.watched_symbols, "added": False}
+    # Verify the symbol actually exists at the provider before watching it.
+    tick = await svc.market_data.get_tick(symbol)
+    if tick is None:
+        raise HTTPException(
+            404, detail=f"Symbol {symbol} is not available from the current data source")
+    if symbol not in svc.market_data.watched_symbols:
+        svc.market_data.watched_symbols.append(symbol)
+    return {"symbols": svc.market_data.watched_symbols, "added": True}
+
+
+@router.delete("/watchlist/{symbol}")
+async def watchlist_remove(symbol: str, request: Request):
+    svc = services(request)
+    symbol = symbol.upper()
+    if symbol not in svc.market_data.watched_symbols:
+        raise HTTPException(404, detail=f"{symbol} is not on the watchlist")
+    svc.market_data.watched_symbols.remove(symbol)
+    svc.market_data.latest_ticks.pop(symbol, None)
+    return {"symbols": svc.market_data.watched_symbols, "removed": True}
 
 
 @router.get("/market/{symbol}")
@@ -288,6 +323,19 @@ async def journal(request: Request, limit: int = 200, symbol: str | None = None)
     return {"entries": await svc.db.journal_entries(limit=limit, symbol=symbol)}
 
 
+class JournalNotesBody(BaseModel):
+    notes: str = Field(max_length=2000)
+
+
+@router.patch("/journal/{entry_id}/notes")
+async def journal_notes(entry_id: int, body: JournalNotesBody, request: Request):
+    svc = services(request)
+    entry = await svc.db.update_journal_notes(entry_id, body.notes)
+    if entry is None:
+        raise HTTPException(404, detail=f"Journal entry {entry_id} not found")
+    return {"entry": entry}
+
+
 @router.get("/coach")
 async def coach(request: Request):
     svc = services(request)
@@ -327,7 +375,10 @@ async def calendar(request: Request, hours: float = 48):
 @router.post("/calendar/events")
 async def calendar_add(body: CalendarEventBody, request: Request):
     svc = services(request)
-    event = svc.calendar.add_event(**body.model_dump())
+    try:
+        event = svc.calendar.add_event(**body.model_dump())
+    except ValueError as exc:
+        raise HTTPException(422, detail=str(exc))
     return {"event": event.as_dict()}
 
 

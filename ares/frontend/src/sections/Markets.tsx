@@ -1,11 +1,23 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
+import { api } from "../lib/api";
 import { useAres } from "../store";
+import type { SymbolInfo } from "../lib/types";
 import { Empty, PanelTitle } from "../components/ui";
 
 export default function Markets() {
   const { ticks, favorites, toggleFavorite, setSymbol, setSection, symbol } = useAres();
   const [query, setQuery] = useState("");
   const [favOnly, setFavOnly] = useState(false);
+  const [allSymbols, setAllSymbols] = useState<SymbolInfo[]>([]);
+  const [watched, setWatched] = useState<string[]>([]);
+  const [busySymbol, setBusySymbol] = useState<string | null>(null);
+
+  useEffect(() => {
+    void api.get<{ symbols: SymbolInfo[] }>("/api/symbols")
+      .then((d) => setAllSymbols(d.symbols)).catch(() => {});
+    void api.get<{ symbols: string[] }>("/api/watchlist")
+      .then((d) => setWatched(d.symbols)).catch(() => {});
+  }, []);
 
   const rows = useMemo(() => {
     let list = Object.values(ticks);
@@ -17,6 +29,37 @@ export default function Markets() {
       return fa - fb || a.symbol.localeCompare(b.symbol);
     });
   }, [ticks, query, favOnly, favorites]);
+
+  // Provider symbols matching the search that are not yet on the watchlist.
+  const addable = useMemo(() => {
+    if (!query || query.length < 2) return [];
+    const q = query.toUpperCase();
+    const watchedSet = new Set([...watched, ...Object.keys(ticks)]);
+    return allSymbols
+      .filter((s) => s.name.toUpperCase().includes(q) && !watchedSet.has(s.name.toUpperCase()))
+      .slice(0, 8);
+  }, [query, allSymbols, watched, ticks]);
+
+  const addToWatchlist = async (name: string) => {
+    setBusySymbol(name);
+    try {
+      const resp = await api.post<{ symbols: string[] }>(`/api/watchlist/${name}`);
+      setWatched(resp.symbols);
+    } catch { /* symbol rejected by data source; row stays addable */ }
+    setBusySymbol(null);
+  };
+
+  const removeFromWatchlist = async (name: string) => {
+    try {
+      const resp = await api.del<{ symbols: string[] }>(`/api/watchlist/${name}`);
+      setWatched(resp.symbols);
+      useAres.setState((s) => {
+        const next = { ...s.ticks };
+        delete next[name];
+        return { ticks: next };
+      });
+    } catch { /* already gone */ }
+  };
 
   return (
     <div className="h-full overflow-y-auto p-3">
@@ -35,6 +78,24 @@ export default function Markets() {
         }>
           Market Watch
         </PanelTitle>
+
+        {addable.length > 0 && (
+          <div className="border-b border-line px-3.5 py-2">
+            <div className="mb-1 text-[10.5px] font-semibold uppercase tracking-wider text-faint">
+              Available from the data source — add to watchlist
+            </div>
+            <div className="flex flex-wrap gap-1.5">
+              {addable.map((s) => (
+                <button key={s.name} disabled={busySymbol === s.name}
+                  onClick={() => void addToWatchlist(s.name)}
+                  title={s.description}
+                  className="chip hover:!text-accent disabled:opacity-40">
+                  + {s.name}
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
 
         {rows.length === 0 ? (
           <Empty>
@@ -76,7 +137,13 @@ export default function Markets() {
                     <td className="px-2 py-2">
                       <span className={`chip ${t.source === "SIMULATED" ? "!text-warn" : "!text-online"}`}>{t.source}</span>
                     </td>
-                    <td className="px-2 py-2 text-right text-[10.5px] text-faint">open →</td>
+                    <td className="px-2 py-2 text-right">
+                      <span className="text-[10.5px] text-faint">open →</span>
+                      <button
+                        onClick={(e) => { e.stopPropagation(); void removeFromWatchlist(t.symbol); }}
+                        title="Remove from watchlist"
+                        className="ml-2 text-[10.5px] text-faint hover:text-bear">✕</button>
+                    </td>
                   </tr>
                 ))}
               </tbody>

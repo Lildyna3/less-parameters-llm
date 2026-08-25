@@ -95,6 +95,17 @@ class Database:
             session.add(entry)
             await session.commit()
 
+    async def update_journal_notes(self, entry_id: int, notes: str) -> dict | None:
+        if not self.session_factory:
+            return None
+        async with self.session_factory() as session:
+            entry = await session.get(JournalEntry, entry_id)
+            if entry is None:
+                return None
+            entry.notes = notes
+            await session.commit()
+            return entry.as_dict()
+
     async def journal_entries(self, limit: int = 200, symbol: str | None = None) -> list[dict]:
         if not self.session_factory:
             return []

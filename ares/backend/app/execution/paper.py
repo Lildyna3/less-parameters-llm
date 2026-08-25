@@ -261,7 +261,9 @@ class PaperTradingEngine:
     async def mark_to_market(self) -> None:
         sl_tp_hits: list[tuple[PaperPosition, float, str]] = []
         for pos in self.positions.values():
-            tick = self.market_data.latest_ticks.get(pos.symbol)
+            # fresh_tick only: a stale price from before the data source went
+            # quiet must never move P/L or trigger SL/TP.
+            tick = self.market_data.fresh_tick(pos.symbol)
             if not tick:
                 continue
             price = tick["bid"] if pos.direction == "buy" else tick["ask"]

@@ -135,5 +135,15 @@ class SimulatedProvider(MarketDataProvider):
                 "volume": round(abs(rng.gauss(500, 200)) + 50),
             })
             price = close_p
-        self._live.setdefault(symbol, price)
+
+        # Each (symbol, timeframe) walk is independently seeded, so the series
+        # would end at different prices. Shift the whole series so every
+        # timeframe converges on the one shared live price — otherwise the
+        # live tick stream visually rips the last candle of other timeframes.
+        anchor = self._live.setdefault(symbol, price)
+        delta = anchor - candles[-1]["close"]
+        if abs(delta) > 10 ** -digits:
+            for c in candles:
+                for key in ("open", "high", "low", "close"):
+                    c[key] = round(c[key] + delta, digits)
         return candles

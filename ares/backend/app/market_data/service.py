@@ -29,6 +29,7 @@ class MarketDataService:
         self.settings = settings
         self.watched_symbols: list[str] = list(settings.default_symbols)
         self.latest_ticks: dict[str, dict] = {}
+        self._tick_times: dict[str, float] = {}  # monotonic receipt time per symbol
         self._prev_day_close: dict[str, float] = {}
         self._daily_refs_checked_at: float = -3600.0
         self._daily_refs_failed: set[str] = set()
@@ -79,7 +80,7 @@ class MarketDataService:
                     tick = await self.provider.get_tick(symbol)
                     if tick:
                         tick.update(self._change_stats(symbol, tick))
-                        self.latest_ticks[symbol] = tick
+                        self._store_tick(symbol, tick)
                         updates.append(tick)
                 if updates and self.broadcast:
                     await self.broadcast({"type": "ticks", "data": updates})
@@ -132,19 +133,46 @@ class MarketDataService:
             self._symbols_cache = (time.monotonic(), symbols)
         return symbols
 
+    def _store_tick(self, symbol: str, tick: dict) -> None:
+        self.latest_ticks[symbol] = tick
+        self._tick_times[symbol] = time.monotonic()
+
+    @property
+    def _tick_max_age(self) -> float:
+        # A cached tick is "fresh" for a few loop intervals; beyond that the
+        # data source has genuinely stopped and consumers must not price
+        # anything off it.
+        return max(5.0, self.settings.tick_interval_seconds * 3)
+
+    def fresh_tick(self, symbol: str) -> dict | None:
+        """Cached tick only if it is recent; None otherwise. Never returns a
+        price from before the data source went quiet."""
+        tick = self.latest_ticks.get(symbol)
+        if tick is None:
+            return None
+        if time.monotonic() - self._tick_times.get(symbol, 0.0) > self._tick_max_age:
+            return None
+        return tick
+
+    def fresh_ticks(self) -> dict[str, dict]:
+        return {s: t for s, t in self.latest_ticks.items() if self.fresh_tick(s)}
+
     async def get_tick(self, symbol: str) -> dict | None:
-        cached = self.latest_ticks.get(symbol)
+        cached = self.fresh_tick(symbol)
         if cached:
             return cached
         tick = await self.provider.get_tick(symbol)
         if tick:
             tick.update(self._change_stats(symbol, tick))
-            self.latest_ticks[symbol] = tick
+            self._store_tick(symbol, tick)
             if symbol not in self.watched_symbols:
                 self.watched_symbols.append(symbol)
         return tick
 
+    _MAX_CANDLE_CACHE_ENTRIES = 64
+
     async def get_candles(self, symbol: str, timeframe: str, count: int = 300) -> list[dict]:
+        count = min(count, self.settings.candle_cache_size)
         key = (symbol, timeframe, count)
         ttl = _CANDLE_TTL.get(timeframe, 60)
         cached = self._candle_cache.get(key)
@@ -153,6 +181,9 @@ class MarketDataService:
         candles = await self.provider.get_candles(symbol, timeframe, count)
         if candles:
             self._candle_cache[key] = (time.monotonic(), candles)
+            if len(self._candle_cache) > self._MAX_CANDLE_CACHE_ENTRIES:
+                oldest = min(self._candle_cache, key=lambda k: self._candle_cache[k][0])
+                del self._candle_cache[oldest]
             if timeframe == "D1" and len(candles) >= 2:
                 self._prev_day_close[symbol] = candles[-2]["close"]
         return candles

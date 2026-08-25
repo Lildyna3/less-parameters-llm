@@ -108,8 +108,27 @@ class TakeoverManager:
         if not proposed_trades:
             return {"success": False, "message": "A takeover request must include at least one proposed trade."}
 
-        trades = [ProposedTrade(**{k: t[k] for k in ("symbol", "direction", "volume", "sl")},
-                                tp=t.get("tp")) for t in proposed_trades]
+        trades: list[ProposedTrade] = []
+        for i, t in enumerate(proposed_trades):
+            missing = [k for k in ("symbol", "direction", "volume", "sl") if k not in t]
+            if missing:
+                return {"success": False,
+                        "message": f"Proposed trade #{i + 1} is missing required field(s): {', '.join(missing)}"}
+            try:
+                volume = float(t["volume"])
+                sl = float(t["sl"])
+            except (TypeError, ValueError):
+                return {"success": False,
+                        "message": f"Proposed trade #{i + 1} has non-numeric volume or sl"}
+            if volume <= 0:
+                return {"success": False, "message": f"Proposed trade #{i + 1} volume must be positive"}
+            if t["direction"] not in ("buy", "sell"):
+                return {"success": False,
+                        "message": f"Proposed trade #{i + 1} direction must be 'buy' or 'sell'"}
+            tp = t.get("tp")
+            trades.append(ProposedTrade(symbol=str(t["symbol"]).upper(), direction=t["direction"],
+                                        volume=volume, sl=sl,
+                                        tp=float(tp) if tp is not None else None))
         session = TakeoverSession(
             id=f"TK-{uuid.uuid4().hex[:8]}",
             symbol=symbol, direction=direction, reason=reason, confidence=confidence,
@@ -218,13 +237,21 @@ class TakeoverManager:
                 session.log_lines.append(f"Order refused: {result.message}")
 
         # Complete when everything proposed has been handled and closed.
+        # A session where every order was refused ends as STOPPED, not
+        # COMPLETED — the log must never claim trades ran when none did.
         all_done = all(t.executed for t in session.proposed_trades)
         open_in_basket = any(
             p.basket_id == session.basket_id for p in self.paper.positions.values()
         )
-        if all_done and not open_in_basket and session.trades_executed >= 0:
-            session.state = TakeoverState.COMPLETED
-            session.log_lines.append("All takeover trades executed and closed. Session complete.")
+        if all_done and not open_in_basket:
+            if session.trades_executed > 0:
+                session.state = TakeoverState.COMPLETED
+                session.log_lines.append(
+                    f"{session.trades_executed} takeover trade(s) executed and closed. Session complete.")
+            else:
+                session.state = TakeoverState.STOPPED
+                session.log_lines.append(
+                    "No proposed trades could be executed (all refused). Session ended without trading.")
             self._archive()
 
     def status(self) -> dict:

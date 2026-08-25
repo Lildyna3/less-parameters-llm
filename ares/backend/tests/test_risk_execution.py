@@ -102,11 +102,11 @@ async def test_paper_sl_hit_closes_position(paper):
     result = await paper.submit_order("EURUSD", "buy", 0.1, sl=entry - 0.0001, tp=None)
     assert result.success
     pos = list(paper.positions.values())[0]
-    # Force a tick below the SL and mark to market.
-    paper.market_data.latest_ticks["EURUSD"] = {
+    # Force a fresh tick below the SL and mark to market.
+    paper.market_data._store_tick("EURUSD", {
         "symbol": "EURUSD", "bid": pos.sl - 0.0005, "ask": pos.sl - 0.0003,
         "spread_points": 2, "source": "SIMULATED",
-    }
+    })
     await paper.mark_to_market()
     assert len(paper.positions) == 0
     assert paper.history[-1].close_reason == "stop-loss hit"

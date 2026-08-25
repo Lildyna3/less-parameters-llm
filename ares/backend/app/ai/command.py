@@ -30,9 +30,19 @@ from .provider import AIProvider
 
 log = get_logger("command")
 
-_SYMBOL_RE = re.compile(r"\b([A-Z]{6}|XAUUSD|XAGUSD|US500|BTCUSD|GOLD|SILVER)\b", re.IGNORECASE)
+_SYMBOL_RE = re.compile(r"\b([A-Za-z]{6}|XAUUSD|XAGUSD|US500|BTCUSD|GOLD|SILVER)\b", re.IGNORECASE)
 _TF_RE = re.compile(r"\b(M1|M5|M15|M30|H1|H4|D1|W1)\b", re.IGNORECASE)
 _ALIASES = {"GOLD": "XAUUSD", "SILVER": "XAGUSD"}
+# 6-letter tokens are only accepted as symbols when they are known instruments
+# (or explicit aliases) — otherwise ordinary words like "should" or "market"
+# would be treated as tickers.
+_KNOWN_SYMBOLS = {
+    "EURUSD", "GBPUSD", "USDJPY", "USDCHF", "AUDUSD", "NZDUSD", "USDCAD",
+    "EURGBP", "EURJPY", "GBPJPY", "EURCHF", "EURAUD", "EURNZD", "EURCAD",
+    "GBPCHF", "GBPAUD", "GBPNZD", "GBPCAD", "AUDJPY", "AUDNZD", "AUDCAD",
+    "AUDCHF", "NZDJPY", "NZDCHF", "NZDCAD", "CADJPY", "CADCHF", "CHFJPY",
+    "XAUUSD", "XAGUSD", "US500", "BTCUSD", "ETHUSD",
+}
 
 
 def deterministic_narrative(analysis: dict, news_warning: dict | None = None) -> str:
@@ -102,11 +112,14 @@ class CommandCenter:
         self.last_analysis[symbol] = analysis
 
     def _extract_symbol(self, text: str) -> str | None:
-        m = _SYMBOL_RE.search(text)
-        if not m:
-            return None
-        sym = m.group(1).upper()
-        return _ALIASES.get(sym, sym)
+        known = _KNOWN_SYMBOLS | set(self.market_data.watched_symbols) \
+            | set(self.market_data.latest_ticks)
+        for m in _SYMBOL_RE.finditer(text):
+            token = m.group(1)
+            sym = _ALIASES.get(token.upper(), token.upper())
+            if sym in known:
+                return sym
+        return None
 
     async def _narrate(self, analysis: dict, question: str | None) -> str:
         news_warning = self.calendar.news_risk_for(analysis["symbol"])
@@ -124,8 +137,8 @@ class CommandCenter:
         symbol = self._extract_symbol(text)
 
         # ---- market scan -----------------------------------------------------
-        if any(k in lower for k in ("scan the market", "scan markets", "market scan",
-                                    "across the market", "scan")) and "scanner" not in lower:
+        if (re.search(r"\bscan\b", lower) or "across the market" in lower) \
+                and "scanner" not in lower:
             rows = await self.scanner.scan(self.market_data.watched_symbols[:12])
             if not rows:
                 return {"reply": "Market scan came back empty — DATA SOURCE OFFLINE. "

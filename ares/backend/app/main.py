@@ -103,7 +103,7 @@ async def _periodic_engine_tick(svc: AppServices) -> None:
                 await svc.alerts.emit("risk", "danger",
                                       f"Basket {basket_id} hit its maximum loss and was closed")
             await svc.takeover.tick()
-            await svc.alerts.check_price_alerts(svc.market_data.latest_ticks)
+            await svc.alerts.check_price_alerts(svc.market_data.fresh_ticks())
         except asyncio.CancelledError:
             raise
         except Exception as exc:  # noqa: BLE001

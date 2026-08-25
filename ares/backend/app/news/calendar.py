@@ -34,6 +34,18 @@ class EconomicEvent:
         return self.__dict__.copy()
 
 
+def parse_when(value: str) -> datetime | None:
+    """Parse an ISO timestamp defensively. Naive values are treated as UTC so
+    aware/naive comparisons can never raise; unparseable values return None."""
+    try:
+        when = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except (ValueError, TypeError):
+        return None
+    if when.tzinfo is None:
+        when = when.replace(tzinfo=timezone.utc)
+    return when
+
+
 class EconomicCalendar:
     def __init__(self, settings: NewsSettings) -> None:
         self.settings = settings
@@ -47,9 +59,12 @@ class EconomicCalendar:
     def add_event(self, *, title: str, currency: str, impact: str, scheduled_at: str,
                   previous: str | None = None, forecast: str | None = None,
                   actual: str | None = None, source: str = "user") -> EconomicEvent:
+        when = parse_when(scheduled_at)
+        if when is None:
+            raise ValueError(f"scheduled_at is not a valid ISO timestamp: {scheduled_at!r}")
         event = EconomicEvent(
             id=self._next_id, title=title, currency=currency.upper(),
-            impact=impact.lower(), scheduled_at=scheduled_at,
+            impact=impact.lower(), scheduled_at=when.isoformat(),
             previous=previous, forecast=forecast, actual=actual, source=source,
         )
         self._next_id += 1
@@ -62,11 +77,8 @@ class EconomicCalendar:
         horizon = now + timedelta(hours=hours)
         out = []
         for e in self.events:
-            try:
-                when = datetime.fromisoformat(e.scheduled_at.replace("Z", "+00:00"))
-            except ValueError:
-                continue
-            if now - timedelta(hours=2) <= when <= horizon:
+            when = parse_when(e.scheduled_at)
+            if when and now - timedelta(hours=2) <= when <= horizon:
                 out.append(e.as_dict())
         return out
 
@@ -81,9 +93,8 @@ class EconomicCalendar:
         for e in self.events:
             if e.impact != "high" or e.currency not in currencies:
                 continue
-            try:
-                when = datetime.fromisoformat(e.scheduled_at.replace("Z", "+00:00"))
-            except ValueError:
+            when = parse_when(e.scheduled_at)
+            if when is None:
                 continue
             delta = when - now
             if timedelta(0) <= delta <= window:
