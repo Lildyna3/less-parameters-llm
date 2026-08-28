@@ -1,0 +1,31 @@
+# systemd unit for a non-Docker ARES deployment.
+#
+#   sudo cp scripts/ares.service /etc/systemd/system/ares.service
+#   sudo systemctl daemon-reload && sudo systemctl enable --now ares
+#
+# Adjust User and the paths to match your install.
+
+[Unit]
+Description=ARES trading command center
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=exec
+User=ares
+WorkingDirectory=/opt/ares/backend
+EnvironmentFile=/opt/ares/.env
+ExecStart=/opt/ares/backend/.venv/bin/uvicorn app.main:app \
+  --host 0.0.0.0 --port 8000 --proxy-headers --forwarded-allow-ips '*'
+Restart=always
+RestartSec=5
+
+# Hardening: ARES only needs to write its SQLite journal.
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/opt/ares/backend/data
+
+[Install]
+WantedBy=multi-user.target

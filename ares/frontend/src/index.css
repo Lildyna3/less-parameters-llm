@@ -1,0 +1,282 @@
+@import "tailwindcss";
+
+/* ============================================================================
+   ARES design system — "quietly expensive"
+
+   A private executive trading desk, not a dashboard template. The language:
+   warm near-black layered surfaces, hairline borders instead of cards with
+   heavy edges, one restrained brass accent reserved for what matters, a serif
+   display face for identity and headline numbers, and generous spacing so
+   dense data still breathes. No neon, no glows, no glassmorphism.
+   ============================================================================ */
+
+:root {
+  /* Layered surfaces — each step is a slight lift, never a hard card. */
+  --s0: #0a0a0b;   /* page */
+  --s1: #101012;   /* panel */
+  --s2: #16161a;   /* raised / inset */
+  --s3: #1e1e23;   /* hover / active */
+
+  /* Hairlines. Borders are light-on-dark at very low alpha. */
+  --line: rgba(255, 255, 255, 0.065);
+  --line-strong: rgba(255, 255, 255, 0.115);
+
+  /* Warm neutral type ramp — off-white, never #fff. */
+  --ink: #eceae5;
+  --dim: #9b978e;
+  --faint: #6b6862;
+
+  /* One accent: brass. Used for active state, focus, and key figures only. */
+  --accent: #c9a961;
+  --accent-dim: rgba(201, 169, 97, 0.13);
+  --accent-line: rgba(201, 169, 97, 0.32);
+
+  /* Semantics — desaturated so a screen of numbers stays calm. */
+  --bull: #55a37d;
+  --bear: #c4635c;
+  --warn: #c9954e;
+  --danger: #bf5a52;
+  --online: #55a37d;
+  --offline: #55524d;
+
+  --grid: rgba(255, 255, 255, 0.035);
+  --shadow: 0 1px 2px rgba(0, 0, 0, 0.4), 0 8px 24px -12px rgba(0, 0, 0, 0.6);
+
+  --font-display: "Iowan Old Style", "Palatino Linotype", Palatino, Georgia,
+                  ui-serif, serif;
+  --font-sans: ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI",
+               Inter, Roboto, "Helvetica Neue", sans-serif;
+  --font-mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, monospace;
+}
+
+/* Light theme: warm paper, not cold white. */
+:root.light {
+  --s0: #f7f6f3;
+  --s1: #ffffff;
+  --s2: #f1efea;
+  --s3: #e7e4dd;
+  --line: rgba(24, 22, 18, 0.09);
+  --line-strong: rgba(24, 22, 18, 0.16);
+  --ink: #1a1917;
+  --dim: #5e5a52;
+  --faint: #8a857c;
+  --accent: #8a6d24;
+  --accent-dim: rgba(138, 109, 36, 0.1);
+  --accent-line: rgba(138, 109, 36, 0.3);
+  --bull: #2f7a56;
+  --bear: #a8433c;
+  --warn: #90681f;
+  --danger: #a8433c;
+  --online: #2f7a56;
+  --offline: #a5a29b;
+  --grid: rgba(24, 22, 18, 0.05);
+  --shadow: 0 1px 2px rgba(24, 22, 18, 0.06), 0 8px 24px -14px rgba(24, 22, 18, 0.14);
+}
+
+@theme inline {
+  --color-s0: var(--s0);
+  --color-s1: var(--s1);
+  --color-s2: var(--s2);
+  --color-s3: var(--s3);
+  --color-line: var(--line);
+  --color-line-strong: var(--line-strong);
+  --color-ink: var(--ink);
+  --color-dim: var(--dim);
+  --color-faint: var(--faint);
+  --color-accent: var(--accent);
+  --color-bull: var(--bull);
+  --color-bear: var(--bear);
+  --color-warn: var(--warn);
+  --color-danger: var(--danger);
+  --color-online: var(--online);
+  --color-offline: var(--offline);
+  --font-display: var(--font-display);
+  --font-sans: var(--font-sans);
+  --font-mono: var(--font-mono);
+}
+
+* { -webkit-tap-highlight-color: transparent; }
+
+html, body, #root { height: 100%; }
+
+html {
+  /* Respect the notch / home indicator on iOS standalone PWAs. */
+  -webkit-text-size-adjust: 100%;
+}
+
+body {
+  margin: 0;
+  background: var(--s0);
+  color: var(--ink);
+  font-family: var(--font-sans);
+  font-size: 13.5px;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+  overscroll-behavior: none;
+}
+
+/* ---- primitives ---------------------------------------------------------- */
+
+.display {
+  font-family: var(--font-display);
+  font-weight: 400;
+  letter-spacing: -0.01em;
+}
+
+.num {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: "tnum";
+}
+
+/* Section label: the small caps that organize an executive layout. */
+.label {
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--faint);
+}
+
+/* Panels are defined by a hairline and a surface lift — no heavy card edges. */
+.panel {
+  background: var(--s1);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+
+.panel-flush {
+  background: var(--s1);
+  border-top: 1px solid var(--line);
+}
+
+.divide-hair > * + * { border-top: 1px solid var(--line); }
+
+.tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 19px;
+  padding: 0 7px;
+  border-radius: 4px;
+  border: 1px solid var(--line);
+  background: var(--s2);
+  color: var(--dim);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  white-space: nowrap;
+}
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  height: 32px;
+  padding: 0 13px;
+  border-radius: 6px;
+  border: 1px solid var(--line-strong);
+  background: var(--s2);
+  color: var(--ink);
+  font-size: 12px;
+  font-weight: 600;
+  transition: background 140ms ease, border-color 140ms ease, color 140ms ease;
+}
+.btn:hover:not(:disabled) { background: var(--s3); border-color: var(--accent-line); }
+.btn:disabled { opacity: 0.42; }
+
+.btn-accent {
+  border-color: var(--accent-line);
+  background: var(--accent-dim);
+  color: var(--accent);
+}
+.btn-accent:hover:not(:disabled) { background: var(--accent-dim); border-color: var(--accent); }
+
+.btn-quiet {
+  border-color: transparent;
+  background: transparent;
+  color: var(--dim);
+}
+.btn-quiet:hover:not(:disabled) { background: var(--s2); color: var(--ink); }
+
+.field {
+  height: 32px;
+  width: 100%;
+  padding: 0 10px;
+  border-radius: 6px;
+  border: 1px solid var(--line);
+  background: var(--s2);
+  color: var(--ink);
+  font-size: 12.5px;
+  transition: border-color 140ms ease;
+}
+.field:focus { outline: none; border-color: var(--accent-line); }
+.field::placeholder { color: var(--faint); }
+
+select.field { padding-right: 6px; }
+
+/* Data tables: hairline rows, no zebra striping, no vertical rules. */
+.table { width: 100%; border-collapse: collapse; }
+.table thead th {
+  padding: 8px 12px;
+  text-align: left;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--faint);
+  border-bottom: 1px solid var(--line);
+  white-space: nowrap;
+}
+.table tbody td {
+  padding: 9px 12px;
+  border-bottom: 1px solid var(--line);
+  font-size: 12.5px;
+  vertical-align: middle;
+}
+.table tbody tr:last-child td { border-bottom: none; }
+.table tbody tr.selectable { cursor: pointer; transition: background 120ms ease; }
+.table tbody tr.selectable:hover { background: var(--s2); }
+.table tbody tr.is-active { background: var(--accent-dim); }
+
+/* Scrollbars: present but unobtrusive. */
+::-webkit-scrollbar { width: 9px; height: 9px; }
+::-webkit-scrollbar-thumb {
+  background: var(--line-strong);
+  border-radius: 5px;
+  border: 2px solid transparent;
+  background-clip: padding-box;
+}
+::-webkit-scrollbar-track { background: transparent; }
+
+.scroll-y { overflow-y: auto; overscroll-behavior: contain; }
+
+/* Wide content scrolls inside its own container; the page never scrolls sideways. */
+.scroll-x { overflow-x: auto; }
+
+/* ---- motion: subtle, and only where it aids comprehension ---------------- */
+
+@keyframes rise {
+  from { opacity: 0; transform: translateY(3px); }
+  to { opacity: 1; transform: none; }
+}
+.rise { animation: rise 180ms cubic-bezier(0.2, 0.7, 0.3, 1); }
+
+@keyframes breathe {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.32; }
+}
+.breathe { animation: breathe 2.4s ease-in-out infinite; }
+
+/* A value that just changed gets one restrained pulse rather than a flash. */
+@keyframes settle {
+  from { color: var(--accent); }
+  to { color: inherit; }
+}
+.settle { animation: settle 700ms ease-out; }
+
+@media (prefers-reduced-motion: reduce) {
+  .rise, .breathe, .settle { animation: none; }
+}

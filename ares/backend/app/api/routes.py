@@ -1,0 +1,591 @@
+"""REST API routes. All routes read from the shared AppServices container
+attached to app.state.services in main.py."""
+
+from __future__ import annotations
+
+from fastapi import APIRouter, HTTPException, Request
+from pydantic import BaseModel, Field
+
+from ..ai.coach import coach_from_journal
+from ..market_data.sessions import current_sessions
+from ..news.feeds import CATEGORIES as NEWS_CATEGORIES
+from ..status import status_registry
+
+router = APIRouter(prefix="/api")
+
+
+def services(request: Request):
+    return request.app.state.services
+
+
+# ---- schemas -----------------------------------------------------------------
+
+class AnalyzeRequest(BaseModel):
+    symbol: str = Field(min_length=3, max_length=16)
+
+
+class CommandRequest(BaseModel):
+    message: str = Field(min_length=1, max_length=2000)
+
+
+class OrderRequest(BaseModel):
+    symbol: str
+    direction: str
+    volume: float = Field(gt=0)
+    sl: float | None = None
+    tp: float | None = None
+    strategy: str | None = None
+    confidence: int | None = Field(default=None, ge=1, le=5)
+    basket_id: str | None = None
+
+
+class ClosePositionRequest(BaseModel):
+    position_id: str
+
+
+class TakeoverRequestBody(BaseModel):
+    symbol: str
+    direction: str
+    reason: str
+    confidence: int = Field(ge=1, le=5)
+    proposed_trades: list[dict]
+    max_loss: float | None = None
+    duration_seconds: int | None = None
+
+
+class TakeoverAuthorizeBody(BaseModel):
+    session_id: str
+    confirm: bool = False
+
+
+class CalendarEventBody(BaseModel):
+    title: str
+    currency: str
+    impact: str
+    scheduled_at: str
+    previous: str | None = None
+    forecast: str | None = None
+    actual: str | None = None
+
+
+class PriceAlertBody(BaseModel):
+    symbol: str
+    level: float
+    condition: str  # above | below
+    note: str | None = None
+
+
+class RiskUpdateBody(BaseModel):
+    # Bounds keep the risk engine coherent: zero/negative limits would either
+    # disable protection or block every order with a misleading reason.
+    max_daily_loss: float | None = Field(default=None, gt=0)
+    max_drawdown_percent: float | None = Field(default=None, gt=0, le=100)
+    max_open_positions: int | None = Field(default=None, ge=1)
+    max_exposure_lots: float | None = Field(default=None, gt=0)
+    max_trades_per_session: int | None = Field(default=None, ge=1)
+    max_position_size_lots: float | None = Field(default=None, gt=0)
+    max_spread_points: float | None = Field(default=None, gt=0)
+    cooldown_seconds_after_loss: float | None = Field(default=None, ge=0)
+
+
+class MT5OrderBody(BaseModel):
+    symbol: str
+    direction: str
+    volume: float = Field(gt=0)
+    sl: float | None = None
+    tp: float | None = None
+    comment: str = "ARES"
+    # Placing a real broker order requires an explicit confirmation flag, so a
+    # stray request can never reach the broker.
+    confirm: bool = False
+
+
+class MT5CloseBody(BaseModel):
+    ticket: int
+    confirm: bool = False
+
+
+# ---- system --------------------------------------------------------------------
+
+@router.get("/health")
+async def health():
+    return {"status": "ok", "app": "ARES", "components": status_registry.snapshot(),
+            "overall": status_registry.overall.value}
+
+
+@router.get("/status")
+async def system_status():
+    return {"components": status_registry.snapshot(), "overall": status_registry.overall.value,
+            "sessions": current_sessions()}
+
+
+@router.get("/account")
+async def account(request: Request):
+    svc = services(request)
+    payload = {"paper": svc.paper.account_snapshot(), "mt5": svc.mt5.status_payload()}
+    return payload
+
+
+# ---- market data ------------------------------------------------------------------
+
+@router.get("/symbols")
+async def symbols(request: Request):
+    svc = services(request)
+    data = await svc.market_data.get_symbols()
+    if not data:
+        return {"symbols": [], "source": None,
+                "message": "DATA SOURCE OFFLINE — no symbols available"}
+    return {"symbols": data, "source": svc.market_data.source_label}
+
+
+@router.get("/watchlist")
+async def watchlist(request: Request):
+    svc = services(request)
+    return {"symbols": svc.market_data.watched_symbols}
+
+
+@router.post("/watchlist/{symbol}")
+async def watchlist_add(symbol: str, request: Request):
+    svc = services(request)
+    symbol = symbol.upper()
+    if symbol in svc.market_data.watched_symbols:
+        return {"symbols": svc.market_data.watched_symbols, "added": False}
+    # Verify the symbol actually exists at the provider before watching it.
+    tick = await svc.market_data.get_tick(symbol)
+    if tick is None:
+        raise HTTPException(
+            404, detail=f"Symbol {symbol} is not available from the current data source")
+    if symbol not in svc.market_data.watched_symbols:
+        svc.market_data.watched_symbols.append(symbol)
+    return {"symbols": svc.market_data.watched_symbols, "added": True}
+
+
+@router.delete("/watchlist/{symbol}")
+async def watchlist_remove(symbol: str, request: Request):
+    svc = services(request)
+    symbol = symbol.upper()
+    if symbol not in svc.market_data.watched_symbols:
+        raise HTTPException(404, detail=f"{symbol} is not on the watchlist")
+    svc.market_data.watched_symbols.remove(symbol)
+    svc.market_data.latest_ticks.pop(symbol, None)
+    return {"symbols": svc.market_data.watched_symbols, "removed": True}
+
+
+@router.get("/market/{symbol}")
+async def market(symbol: str, request: Request):
+    svc = services(request)
+    tick = await svc.market_data.get_tick(symbol.upper())
+    if tick is None:
+        raise HTTPException(503, detail=f"DATA SOURCE OFFLINE — no market data for {symbol}")
+    return tick
+
+
+@router.get("/candles/{symbol}")
+async def candles(symbol: str, request: Request, timeframe: str = "M15", count: int = 300):
+    svc = services(request)
+    count = max(10, min(count, 1500))
+    data = await svc.market_data.get_candles(symbol.upper(), timeframe.upper(), count)
+    if not data:
+        raise HTTPException(503, detail=f"DATA SOURCE OFFLINE — no candles for {symbol} {timeframe}")
+    return {"symbol": symbol.upper(), "timeframe": timeframe.upper(),
+            "source": svc.market_data.source_label, "candles": data}
+
+
+# ---- analysis / AI -------------------------------------------------------------------
+
+@router.post("/analyze")
+async def analyze(body: AnalyzeRequest, request: Request):
+    svc = services(request)
+    news = svc.calendar.news_risk_for(body.symbol.upper())
+    analysis = await svc.engine.analyze(body.symbol.upper(), news_risk=news is not None)
+    if analysis is None:
+        raise HTTPException(503, detail="DATA SOURCE OFFLINE — cannot analyze without market data")
+    svc.command.remember(analysis)
+    return {"analysis": analysis, "news_warning": news}
+
+
+@router.post("/command")
+async def command(body: CommandRequest, request: Request):
+    svc = services(request)
+    return await svc.command.handle(body.message)
+
+
+@router.get("/scanner")
+async def scanner(request: Request):
+    svc = services(request)
+    rows = await svc.scanner.scan(svc.market_data.watched_symbols[:12])
+    return {"results": rows, "source": svc.market_data.source_label if rows else None}
+
+
+# ---- paper trading --------------------------------------------------------------------
+
+@router.get("/positions")
+async def positions(request: Request):
+    svc = services(request)
+    return {"positions": [p.as_dict() for p in svc.paper.positions.values()],
+            "baskets": svc.baskets.list_views()}
+
+
+@router.get("/trades")
+async def trades(request: Request, limit: int = 100):
+    svc = services(request)
+    return {"trades": [t.as_dict() for t in reversed(svc.paper.history[-limit:])]}
+
+
+@router.post("/order/validate")
+async def order_validate(body: OrderRequest, request: Request):
+    svc = services(request)
+    result = await svc.paper.validate_order(body.symbol.upper(), body.direction, body.volume, body.sl, body.tp)
+    return result.as_dict()
+
+
+@router.post("/order/demo")
+async def order_demo(body: OrderRequest, request: Request):
+    svc = services(request)
+    result = await svc.paper.submit_order(
+        body.symbol.upper(), body.direction, body.volume, body.sl, body.tp,
+        strategy=body.strategy, confidence=body.confidence, basket_id=body.basket_id,
+    )
+    if not result.success:
+        return result.as_dict()
+    await svc.alerts.emit("execution", "info",
+                          f"Demo order filled: {body.direction} {body.symbol.upper()} {body.volume} lots")
+    return result.as_dict()
+
+
+@router.post("/position/close")
+async def position_close(body: ClosePositionRequest, request: Request):
+    svc = services(request)
+    result = await svc.paper.close_position(body.position_id)
+    return result.as_dict()
+
+
+@router.post("/basket/{basket_id}/close")
+async def basket_close(basket_id: str, request: Request):
+    svc = services(request)
+    return await svc.baskets.close_basket(basket_id)
+
+
+# ---- risk ----------------------------------------------------------------------------------
+
+@router.get("/risk")
+async def risk(request: Request):
+    return services(request).risk.snapshot()
+
+
+@router.post("/risk/limits")
+async def risk_limits(body: RiskUpdateBody, request: Request):
+    svc = services(request)
+    updates = {k: v for k, v in body.model_dump().items() if v is not None}
+    for key, value in updates.items():
+        setattr(svc.risk.settings, key, value)
+    return {"updated": updates, "risk": svc.risk.snapshot()}
+
+
+@router.post("/risk/emergency-stop")
+async def emergency_stop(request: Request):
+    svc = services(request)
+    svc.risk.engage_emergency_stop("API request")
+    closed = await svc.paper.emergency_close_all()
+    await svc.takeover.stop(reason="emergency stop")
+    await svc.alerts.emit("risk", "danger", "EMERGENCY STOP engaged — all execution blocked")
+    return {"engaged": True, "closed": closed}
+
+
+@router.post("/risk/emergency-stop/release")
+async def emergency_release(request: Request):
+    svc = services(request)
+    svc.risk.release_emergency_stop()
+    return {"engaged": False}
+
+
+# ---- takeover --------------------------------------------------------------------------------
+
+@router.get("/takeover")
+async def takeover_status(request: Request):
+    return services(request).takeover.status()
+
+
+@router.post("/takeover/request")
+async def takeover_request(body: TakeoverRequestBody, request: Request):
+    svc = services(request)
+    return svc.takeover.request(**body.model_dump())
+
+
+@router.post("/takeover/authorize")
+async def takeover_authorize(body: TakeoverAuthorizeBody, request: Request):
+    if not body.confirm:
+        raise HTTPException(400, detail="Explicit confirmation required: set confirm=true. "
+                                        "Takeover cannot be authorized implicitly.")
+    svc = services(request)
+    result = svc.takeover.authorize(body.session_id)
+    if result["success"]:
+        await svc.alerts.emit("execution", "warning",
+                              f"Takeover session {body.session_id} AUTHORIZED by user")
+    return result
+
+
+@router.post("/takeover/stop")
+async def takeover_stop(request: Request):
+    svc = services(request)
+    result = await svc.takeover.stop(reason="user stop via API")
+    await svc.alerts.emit("execution", "warning", "Takeover stopped by user")
+    return result
+
+
+# ---- journal / analytics / coaching -----------------------------------------------------------
+
+@router.get("/journal")
+async def journal(request: Request, limit: int = 200, symbol: str | None = None):
+    svc = services(request)
+    return {"entries": await svc.db.journal_entries(limit=limit, symbol=symbol)}
+
+
+class JournalNotesBody(BaseModel):
+    notes: str = Field(max_length=2000)
+
+
+@router.patch("/journal/{entry_id}/notes")
+async def journal_notes(entry_id: int, body: JournalNotesBody, request: Request):
+    svc = services(request)
+    entry = await svc.db.update_journal_notes(entry_id, body.notes)
+    if entry is None:
+        raise HTTPException(404, detail=f"Journal entry {entry_id} not found")
+    return {"entry": entry}
+
+
+@router.get("/coach")
+async def coach(request: Request):
+    svc = services(request)
+    entries = await svc.db.journal_entries(limit=100)
+    return coach_from_journal(entries)
+
+
+@router.get("/analytics")
+async def analytics(request: Request):
+    svc = services(request)
+    account_snapshot = svc.paper.account_snapshot()
+    confidences = [t.confidence for t in svc.paper.history if t.confidence]
+    dist: dict[int, int] = {}
+    for c in confidences:
+        dist[c] = dist.get(c, 0) + 1
+    return {
+        "account": account_snapshot,
+        "ares": {
+            "analyses_performed": svc.engine.analyses_performed,
+            "risk_blocks": svc.risk.blocks_issued,
+            "confidence_distribution": dist,
+            "successful_setups": len([t for t in svc.paper.history if t.pl > 0 and (t.confidence or 0) >= 4]),
+            "failed_setups": len([t for t in svc.paper.history if t.pl < 0 and (t.confidence or 0) >= 4]),
+        },
+    }
+
+
+# ---- news / calendar / alerts ---------------------------------------------------------------------
+
+@router.get("/calendar")
+async def calendar(request: Request, hours: float = 48):
+    svc = services(request)
+    return {"events": svc.calendar.upcoming(hours=hours),
+            "note": "Calendar starts empty; add events manually or connect a licensed feed. ARES never fabricates news."}
+
+
+@router.post("/calendar/events")
+async def calendar_add(body: CalendarEventBody, request: Request):
+    svc = services(request)
+    try:
+        event = svc.calendar.add_event(**body.model_dump())
+    except ValueError as exc:
+        raise HTTPException(422, detail=str(exc))
+    return {"event": event.as_dict()}
+
+
+# ---- real MT5 execution (DEMO accounts only) --------------------------------------------------
+
+@router.post("/mt5/order/check")
+async def mt5_order_check(body: MT5OrderBody, request: Request):
+    """Pre-trade check. Returns READY or BLOCKED with the exact reasons, and
+    places nothing."""
+    svc = services(request)
+    news = svc.calendar.news_risk_for(body.symbol.upper())
+    result = await svc.executor.pre_trade_check(
+        body.symbol.upper(), body.direction, body.volume, body.sl, body.tp, news)
+    return result.as_dict()
+
+
+@router.post("/mt5/order")
+async def mt5_order(body: MT5OrderBody, request: Request):
+    """Place a real market order on the connected DEMO account.
+
+    Refuses unless: confirm=true, MT5 is connected, the account reports itself
+    as DEMO, and every pre-trade check passes. Reports success only on a
+    success retcode with a ticket.
+    """
+    if not body.confirm:
+        raise HTTPException(
+            400, detail="Explicit confirmation required: set confirm=true. ARES will not "
+                        "send an order to a broker implicitly.")
+    svc = services(request)
+    news = svc.calendar.news_risk_for(body.symbol.upper())
+    result = await svc.executor.place_order(
+        body.symbol.upper(), body.direction, body.volume,
+        sl=body.sl, tp=body.tp, comment=body.comment, news_warning=news)
+    await svc.alerts.emit(
+        "execution", "info" if result.success else "warning",
+        result.message, {"ticket": result.ticket, "retcode": result.retcode})
+    return result.as_dict()
+
+
+@router.get("/mt5/positions")
+async def mt5_positions(request: Request):
+    svc = services(request)
+    positions = await svc.mt5.get_positions()
+    return {"positions": positions, "connected": getattr(svc.mt5, "connected", False),
+            "message": None if positions or getattr(svc.mt5, "connected", False)
+            else "MT5 is not connected, so no broker positions can be read."}
+
+
+@router.post("/mt5/position/close")
+async def mt5_position_close(body: MT5CloseBody, request: Request):
+    if not body.confirm:
+        raise HTTPException(400, detail="Explicit confirmation required: set confirm=true.")
+    svc = services(request)
+    result = await svc.executor.close_position(body.ticket)
+    await svc.alerts.emit("execution", "info" if result.success else "warning", result.message)
+    return result.as_dict()
+
+
+@router.get("/mt5/history")
+async def mt5_history(request: Request, hours: float = 72):
+    """Closed deals from MT5 history — the source for outcome tracking."""
+    svc = services(request)
+    deals = await svc.executor.closed_deals(hours=hours)
+    return {"deals": deals, "hours": hours,
+            "message": None if deals else
+            "No closed deals returned. Either none exist in this window, or MT5 is not connected."}
+
+
+# ---- news feed -------------------------------------------------------------------------------
+
+@router.get("/news")
+async def news(request: Request, category: str | None = None, symbol: str | None = None,
+               impact: str | None = None, search: str | None = None, limit: int = 60):
+    svc = services(request)
+    articles = svc.news.query(category=category, symbol=symbol, impact=impact,
+                              search=search, limit=max(1, min(limit, 200)))
+    payload = svc.news.status_payload()
+    return {
+        "articles": articles,
+        "categories": ["ALL", *NEWS_CATEGORIES],
+        "status": payload,
+        "message": None if articles else (
+            "No news available. " + (
+                "News sources are unreachable from this host — ARES shows nothing "
+                "rather than inventing headlines."
+                if payload["enabled"] else "The news feed is disabled in configuration."
+            )
+        ),
+    }
+
+
+@router.get("/news/{article_id}")
+async def news_detail(article_id: str, request: Request):
+    svc = services(request)
+    article = svc.news.get(article_id)
+    if article is None:
+        raise HTTPException(404, detail="Article not found or expired from the feed")
+    return {"article": article, "related": svc.news.related(article_id)}
+
+
+@router.post("/news/refresh")
+async def news_refresh(request: Request):
+    svc = services(request)
+    return await svc.news.refresh(force=True)
+
+
+# ---- market pulse ----------------------------------------------------------------------------
+
+@router.get("/pulse")
+async def pulse(request: Request):
+    """Aggregate market state for the Command Center. Every field is derived
+    from real data; absent data is reported as null, never invented."""
+    svc = services(request)
+    ticks = svc.market_data.fresh_ticks()
+    movers = sorted(
+        (t for t in ticks.values() if t.get("change_percent") is not None),
+        key=lambda t: abs(t["change_percent"]), reverse=True,
+    )[:6]
+
+    scan = svc.scanner.last_scan
+    regime = None
+    if scan:
+        biases = [row["bias"] for row in scan]
+        bullish = biases.count("bullish")
+        bearish = biases.count("bearish")
+        if bullish > bearish * 2:
+            regime = "risk-on / broadly bullish"
+        elif bearish > bullish * 2:
+            regime = "risk-off / broadly bearish"
+        elif bullish + bearish < len(biases) / 2:
+            regime = "ranging / no directional consensus"
+        else:
+            regime = "mixed / two-way"
+        volatility_states = [row["volatility"] for row in scan]
+        elevated = volatility_states.count("elevated")
+        volatility = ("elevated" if elevated > len(scan) / 3
+                      else "compressed" if volatility_states.count("compressed") > len(scan) / 3
+                      else "normal")
+        strongest = [r for r in scan if r["confidence"] >= 4][:5]
+    else:
+        volatility, strongest = None, []
+
+    return {
+        "regime": regime,
+        "volatility": volatility,
+        "sessions": current_sessions(),
+        "movers": movers,
+        "strongest_setups": strongest,
+        "scanned_at": bool(scan),
+        "upcoming_events": svc.calendar.upcoming(hours=24)[:5],
+        "data_source": svc.market_data.source_label if ticks else None,
+        "quotes_live": len(ticks),
+        "account": svc.paper.account_snapshot(),
+        "risk": svc.risk.snapshot(),
+        "news_headlines": svc.news.query(limit=5),
+    }
+
+
+# ---- MT5 bridge -------------------------------------------------------------------------------
+
+@router.get("/bridge")
+async def bridge_status(request: Request):
+    svc = services(request)
+    payload = svc.bridge.status_payload()
+    payload["access_mode"] = "direct" if svc.mt5_monitor is not None else "bridge"
+    payload["instructions"] = (
+        "Run ares/bridge/ares_mt5_bridge.py on a Windows machine with MetaTrader 5 "
+        "installed. Set ARES_BACKEND_URL and ARES_BRIDGE_TOKEN there to match this "
+        "server. See docs/MT5_BRIDGE.md."
+    )
+    return payload
+
+
+@router.get("/alerts")
+async def alerts(request: Request):
+    return services(request).alerts.list_state()
+
+
+@router.post("/alerts/price")
+async def alerts_add(body: PriceAlertBody, request: Request):
+    svc = services(request)
+    if body.condition not in ("above", "below"):
+        raise HTTPException(400, detail="condition must be 'above' or 'below'")
+    return {"alert": svc.alerts.add_price_alert(body.symbol, body.level, body.condition, body.note)}
+
+
+@router.delete("/alerts/price/{alert_id}")
+async def alerts_delete(alert_id: int, request: Request):
+    removed = services(request).alerts.remove_price_alert(alert_id)
+    if not removed:
+        raise HTTPException(404, detail="alert not found")
+    return {"removed": alert_id}
