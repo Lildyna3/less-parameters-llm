@@ -3,6 +3,7 @@ import { api } from "../lib/api";
 import { useAres } from "../store";
 import type { Basket, Position, Trade } from "../lib/types";
 import TakeoverPanel from "../components/TakeoverPanel";
+import ExecutionTicket, { BrokerBook } from "../components/ExecutionTicket";
 import {
   Empty, Metric, PanelHeader, Tag, Unavailable, duration, price, signed,
 } from "../components/kit";
@@ -112,6 +113,11 @@ export default function Positions() {
   return (
     <div className="scroll-y h-full">
       <div className="mx-auto flex max-w-[1400px] flex-col gap-4 p-4 pb-6">
+        {/* Real broker execution sits above ARES's own paper book, and the two
+            are never merged into one table. */}
+        <ExecutionTicket />
+        <BrokerBook />
+
         {active && (
           <PositionDetail
             position={active}

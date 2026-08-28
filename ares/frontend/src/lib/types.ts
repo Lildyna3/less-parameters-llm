@@ -328,3 +328,74 @@ export interface ChainLink {
   state: "ONLINE" | "OFFLINE" | "DEGRADED" | "UNKNOWN" | "UNVERIFIED";
   detail: string;
 }
+
+/* Real MT5 execution (DEMO accounts only). These mirror the backend
+   dataclasses in app/mt5/execution.py exactly — the UI never invents a field
+   the broker did not report. */
+
+export interface CheckItem {
+  name: string;
+  ok: boolean;
+  detail: string;
+}
+
+export interface PreTradePlan {
+  symbol: string;
+  direction: string;
+  volume: number | null;
+  entry: number | null;
+  sl: number | null;
+  tp: number | null;
+  risk_reward: number | null;
+  margin_required: number | null;
+  account_mode: string;
+  broker: string | null;
+  server: string | null;
+}
+
+export interface PreTradeResult {
+  ready: boolean;
+  verdict: "READY" | "BLOCKED";
+  items: CheckItem[];
+  blocked_by: string[];
+  plan: Partial<PreTradePlan>;
+}
+
+export interface ExecutionResult {
+  success: boolean;
+  message: string;
+  retcode: number | null;
+  ticket: number | null;
+  broker_comment: string | null;
+  position: BrokerPosition | null;
+  check: PreTradeResult | null;
+}
+
+export interface BrokerPosition {
+  ticket: number;
+  symbol: string;
+  direction: string;
+  volume: number;
+  entry: number;
+  current_price: number;
+  sl: number | null;
+  tp: number | null;
+  profit: number;
+  swap: number;
+  comment: string;
+  opened_at: string;
+}
+
+export interface BrokerDeal {
+  ticket: number;
+  position_id: number;
+  symbol: string;
+  direction: string;
+  volume: number;
+  price: number;
+  profit: number;
+  commission: number;
+  swap: number;
+  comment: string;
+  closed_at: string;
+}
