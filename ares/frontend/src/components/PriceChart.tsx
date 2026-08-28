@@ -8,7 +8,12 @@ import { api } from "../lib/api";
 import { useAres } from "../store";
 import type { Analysis, Candle, Position } from "../lib/types";
 
-const TIMEFRAMES = ["M1", "M5", "M15", "M30", "H1", "H4", "D1", "W1"];
+/* Every timeframe MT5 exposes natively. The row scrolls rather than hiding
+   any of them behind a menu. */
+const TIMEFRAMES = [
+  "M1", "M2", "M3", "M4", "M5", "M6", "M10", "M12", "M15", "M20", "M30",
+  "H1", "H2", "H3", "H4", "H6", "H8", "H12", "D1", "W1", "MN1",
+];
 
 /** Chart chrome is read from the design tokens so it re-themes with the app
     and never needs the chart to be rebuilt. */

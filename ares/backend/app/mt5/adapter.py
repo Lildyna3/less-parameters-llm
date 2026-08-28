@@ -27,9 +27,13 @@ from .detect import MT5Detection, detect_mt5
 
 log = get_logger("mt5")
 
+# Every timeframe the MetaTrader5 package exposes natively. Nothing here is
+# aggregated or invented: if MT5 does not provide it, ARES does not offer it.
 TIMEFRAME_MINUTES = {
-    "M1": 1, "M5": 5, "M15": 15, "M30": 30,
-    "H1": 60, "H4": 240, "D1": 1440, "W1": 10080,
+    "M1": 1, "M2": 2, "M3": 3, "M4": 4, "M5": 5, "M6": 6, "M10": 10,
+    "M12": 12, "M15": 15, "M20": 20, "M30": 30,
+    "H1": 60, "H2": 120, "H3": 180, "H4": 240, "H6": 360, "H8": 480, "H12": 720,
+    "D1": 1440, "W1": 10080, "MN1": 43200,
 }
 
 
@@ -72,6 +76,7 @@ class MT5Adapter:
         if settings.password:
             register_secret(settings.password)
         self.state = ConnectionState.DISCONNECTED
+        self.auth_mode = "login" if settings.credentials_configured else "attach"
         self.last_error: str | None = None
         self.last_connected_at: datetime | None = None
         self.detection: MT5Detection = detect_mt5(settings.path)
@@ -92,14 +97,14 @@ class MT5Adapter:
             log.info("MT5 unavailable on this host: %s", self.last_error)
             return False
 
-        if not self.settings.credentials_configured:
-            self.state = ConnectionState.DISCONNECTED
-            self.last_error = (
-                "MT5 credentials not configured. Set MT5_LOGIN, MT5_PASSWORD and "
-                "MT5_SERVER in your local .env file (never share them in chat)."
-            )
-            log.info("MT5 connection skipped: credentials missing")
-            return False
+        # Two legitimate ways in, in order of preference:
+        #   1. attach  - the terminal is already open and logged in. No password
+        #                is stored anywhere, which is the safer default.
+        #   2. login   - MT5_LOGIN/PASSWORD/SERVER are configured, so ARES can
+        #                bring the terminal up unattended (headless/VPS).
+        # Either way CONNECTED is only reported after account info AND a real
+        # tick are retrieved, so neither path can fake a connection.
+        self.auth_mode = "login" if self.settings.credentials_configured else "attach"
 
         self.state = ConnectionState.CONNECTING
         try:
@@ -121,16 +126,27 @@ class MT5Adapter:
         import MetaTrader5 as mt5  # imported lazily; Windows-only
 
         with self._lock:
-            kwargs: dict[str, Any] = {
-                "login": self.settings.login,
-                "password": self.settings.password,
-                "server": self.settings.server,
-            }
+            kwargs: dict[str, Any] = {}
+            if self.settings.credentials_configured:
+                kwargs.update({
+                    "login": self.settings.login,
+                    "password": self.settings.password,
+                    "server": self.settings.server,
+                })
             if self.detection.terminal_path:
                 kwargs["path"] = self.detection.terminal_path
+
             if not mt5.initialize(**kwargs):
                 code, message = mt5.last_error()
-                self.last_error = f"MT5 initialize failed ({code}): {message}"
+                if self.auth_mode == "attach":
+                    self.last_error = (
+                        f"MT5 initialize failed ({code}): {message}. No credentials are "
+                        "configured, so ARES tried to attach to an already-running "
+                        "terminal. Open MetaTrader 5 and log into your demo account, or "
+                        "set MT5_LOGIN / MT5_PASSWORD / MT5_SERVER in your local .env."
+                    )
+                else:
+                    self.last_error = f"MT5 initialize failed ({code}): {message}"
                 self.state = ConnectionState.ERROR
                 return False
 
@@ -246,11 +262,15 @@ class MT5Adapter:
             return []
         def _sync() -> list[dict]:
             import MetaTrader5 as mt5
+            # Resolved from the package itself, so an MT5 build lacking a
+            # constant simply omits that timeframe rather than erroring.
             tf_map = {
-                "M1": mt5.TIMEFRAME_M1, "M5": mt5.TIMEFRAME_M5, "M15": mt5.TIMEFRAME_M15,
-                "M30": mt5.TIMEFRAME_M30, "H1": mt5.TIMEFRAME_H1, "H4": mt5.TIMEFRAME_H4,
-                "D1": mt5.TIMEFRAME_D1, "W1": mt5.TIMEFRAME_W1,
+                name: getattr(mt5, f"TIMEFRAME_{name}")
+                for name in TIMEFRAME_MINUTES
+                if hasattr(mt5, f"TIMEFRAME_{name}")
             }
+            if timeframe not in tf_map:
+                return []
             with self._lock:
                 rates = self._mt5.copy_rates_from_pos(symbol, tf_map[timeframe], 0, count)
             if rates is None:
@@ -268,7 +288,9 @@ class MT5Adapter:
 
     def status_payload(self) -> dict:
         return {
+            "mode": "direct",
             "state": self.state.value,
+            "auth_mode": self.auth_mode,
             "detection": self.detection.as_dict(),
             "credentials_configured": self.settings.credentials_configured,
             "last_error": self.last_error,

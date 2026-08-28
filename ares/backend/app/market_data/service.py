@@ -20,7 +20,12 @@ log = get_logger("market_data")
 
 # Candle cache TTLs per timeframe (seconds) — short enough to stay live,
 # long enough to avoid hammering the provider.
-_CANDLE_TTL = {"M1": 5, "M5": 15, "M15": 30, "M30": 60, "H1": 120, "H4": 300, "D1": 600, "W1": 1800}
+_CANDLE_TTL = {
+    "M1": 5, "M2": 8, "M3": 10, "M4": 12, "M5": 15, "M6": 18, "M10": 25,
+    "M12": 28, "M15": 30, "M20": 45, "M30": 60,
+    "H1": 120, "H2": 180, "H3": 240, "H4": 300, "H6": 400, "H8": 500, "H12": 600,
+    "D1": 600, "W1": 1800, "MN1": 3600,
+}
 
 
 class MarketDataService:
