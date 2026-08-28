@@ -286,6 +286,28 @@ class MT5Adapter:
             ]
         return await asyncio.to_thread(_sync)
 
+    async def get_positions(self) -> list[dict]:
+        """Open positions read from the terminal. Empty when not connected —
+        never a guess."""
+        if not self.connected:
+            return []
+        def _sync() -> list[dict]:
+            import MetaTrader5 as mt5
+            with self._lock:
+                positions = self._mt5.positions_get() or []
+                return [
+                    {"ticket": p.ticket, "symbol": p.symbol,
+                     "direction": "buy" if p.type == mt5.POSITION_TYPE_BUY else "sell",
+                     "volume": float(p.volume), "entry": float(p.price_open),
+                     "current_price": float(p.price_current),
+                     "sl": float(p.sl) or None, "tp": float(p.tp) or None,
+                     "profit": float(p.profit), "swap": float(p.swap),
+                     "comment": p.comment,
+                     "opened_at": datetime.fromtimestamp(p.time, tz=timezone.utc).isoformat()}
+                    for p in positions
+                ]
+        return await asyncio.to_thread(_sync)
+
     def status_payload(self) -> dict:
         return {
             "mode": "direct",

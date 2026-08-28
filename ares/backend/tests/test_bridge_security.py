@@ -363,3 +363,87 @@ def test_undeclared_peer_is_not_called_connected(client):
         mt5 = client.get("/api/health").json()["components"]["mt5"]
         assert mt5["state"] != "ONLINE"
         assert "no MetaTrader5" in mt5["reason"]
+
+
+# -- real MT5 execution guards -------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_execution_refused_without_a_connected_terminal():
+    """Every guard on the real-order path, with no terminal attached."""
+    from app.config import MT5Settings, RiskSettings
+    from app.mt5.adapter import MT5Adapter
+    from app.mt5.execution import MT5Executor
+    from app.risk.engine import RiskEngine
+
+    executor = MT5Executor(MT5Adapter(MT5Settings()), RiskEngine(RiskSettings()))
+
+    check = await executor.pre_trade_check("EURUSD", "buy", 0.1, 1.05, 1.10)
+    assert check.ready is False
+    assert check.as_dict()["verdict"] == "BLOCKED"
+    assert any("MT5" in reason for reason in check.blocked_by)
+
+    result = await executor.place_order("EURUSD", "buy", 0.1)
+    assert result.success is False
+    assert result.ticket is None          # never invents a ticket
+    assert result.retcode is None
+
+    close = await executor.close_position(12345)
+    assert close.success is False
+
+
+@pytest.mark.asyncio
+async def test_execution_refuses_a_non_demo_account():
+    """A live account is refused outright — there is no override."""
+    from types import SimpleNamespace
+
+    from app.config import RiskSettings
+    from app.mt5.adapter import AccountInfo
+    from app.mt5.execution import MT5Executor
+    from app.risk.engine import RiskEngine
+
+    live_account = AccountInfo(
+        login_masked="****9999", broker="Some Broker", server="Some-Live",
+        currency="USD", balance=5000.0, equity=5000.0, margin_free=5000.0,
+        leverage=100, trade_allowed=True, is_demo=False,
+    )
+    fake_adapter = SimpleNamespace(
+        connected=True, account=live_account, last_error=None, _mt5=object(),
+    )
+    executor = MT5Executor(fake_adapter, RiskEngine(RiskSettings()))
+
+    reason = executor._unavailable()
+    assert reason is not None
+    assert "NOT a demo account" in reason
+
+    result = await executor.place_order("EURUSD", "buy", 0.1, skip_check=True)
+    assert result.success is False
+    assert "NOT a demo account" in result.message
+
+
+def test_mt5_order_endpoint_requires_explicit_confirmation(client):
+    """An order cannot reach a broker without confirm=true."""
+    body = {"symbol": "EURUSD", "direction": "buy", "volume": 0.1}
+    assert client.post("/api/mt5/order", json=body).status_code == 400
+    assert client.post("/api/mt5/position/close", json={"ticket": 1}).status_code == 400
+
+    # With confirmation it is accepted by the API but still refused downstream,
+    # because no terminal is attached in this environment.
+    confirmed = client.post("/api/mt5/order", json={**body, "confirm": True}).json()
+    assert confirmed["success"] is False
+    assert confirmed["ticket"] is None
+
+    # The pre-trade check never places anything and always explains itself.
+    check = client.post("/api/mt5/order/check", json=body).json()
+    assert check["verdict"] == "BLOCKED"
+    assert check["items"] and all("name" in item for item in check["items"])
+
+
+def test_mt5_positions_and_history_are_honest_when_offline(client):
+    positions = client.get("/api/mt5/positions").json()
+    assert positions["positions"] == []
+    assert positions["connected"] is False
+    assert "not connected" in positions["message"]
+
+    history = client.get("/api/mt5/history").json()
+    assert history["deals"] == []
+    assert history["message"]

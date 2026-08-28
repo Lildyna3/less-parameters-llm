@@ -36,6 +36,7 @@ from .market_data.providers import MT5Provider, SimulatedProvider
 from .market_data.service import MarketDataService
 from .mt5.adapter import MT5Adapter
 from .mt5.bridge import BridgeMT5Adapter, MT5BridgeServer
+from .mt5.execution import MT5Executor
 from .mt5.monitor import MT5ConnectionMonitor
 from .news.alerts import AlertManager
 from .news.calendar import EconomicCalendar
@@ -54,6 +55,7 @@ class AppServices:
     mt5: MT5Adapter | BridgeMT5Adapter
     mt5_monitor: MT5ConnectionMonitor | None
     bridge: MT5BridgeServer
+    executor: MT5Executor
     news: NewsService
     market_data: MarketDataService
     engine: AnalysisEngine
@@ -77,14 +79,17 @@ def build_services(config: AresConfig) -> AppServices:
     direct = MT5Adapter(config.mt5)
     monitor: MT5ConnectionMonitor | None = None
 
-    if direct.detection.usable and config.mt5.credentials_configured:
+    if direct.detection.usable:
+        # Windows with the MetaTrader5 package: drive the terminal directly.
+        # Credentials are optional — without them ARES attaches to a terminal
+        # that is already open and logged in, which needs no stored password.
         mt5: MT5Adapter | BridgeMT5Adapter = direct
         monitor = MT5ConnectionMonitor(direct, config.mt5.reconnect_interval_seconds)
-        log.info("MT5 access mode: direct (Windows terminal detected)")
+        log.info("MT5 access mode: direct (%s)", direct.auth_mode)
     else:
         mt5 = BridgeMT5Adapter(bridge_server)
         log.info("MT5 access mode: bridge (this host cannot drive MT5 directly: %s)",
-                 "; ".join(direct.detection.notes) or "credentials not configured")
+                 "; ".join(direct.detection.notes))
 
     if config.market_data.mode == "simulation":
         provider = SimulatedProvider()
@@ -98,6 +103,7 @@ def build_services(config: AresConfig) -> AppServices:
     paper = PaperTradingEngine(market_data, risk, config.execution)
     baskets = BasketManager(paper)
     takeover = TakeoverManager(paper, baskets, config.takeover)
+    executor = MT5Executor(mt5, risk)
     engine = AnalysisEngine(market_data, config.risk.max_spread_points)
     scanner = MarketScanner(engine)
     calendar = EconomicCalendar(config.news)
@@ -107,6 +113,7 @@ def build_services(config: AresConfig) -> AppServices:
                             takeover, risk, calendar, provider=None, news=news)
     return AppServices(
         config=config, mt5=mt5, mt5_monitor=monitor, bridge=bridge_server,
+        executor=executor,
         news=news, market_data=market_data,
         engine=engine, scanner=scanner, risk=risk, paper=paper, baskets=baskets,
         takeover=takeover, calendar=calendar, alerts=alerts, db=db,

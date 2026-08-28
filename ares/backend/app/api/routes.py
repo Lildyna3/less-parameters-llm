@@ -88,6 +88,23 @@ class RiskUpdateBody(BaseModel):
     cooldown_seconds_after_loss: float | None = Field(default=None, ge=0)
 
 
+class MT5OrderBody(BaseModel):
+    symbol: str
+    direction: str
+    volume: float = Field(gt=0)
+    sl: float | None = None
+    tp: float | None = None
+    comment: str = "ARES"
+    # Placing a real broker order requires an explicit confirmation flag, so a
+    # stray request can never reach the broker.
+    confirm: bool = False
+
+
+class MT5CloseBody(BaseModel):
+    ticket: int
+    confirm: bool = False
+
+
 # ---- system --------------------------------------------------------------------
 
 @router.get("/health")
@@ -381,6 +398,71 @@ async def calendar_add(body: CalendarEventBody, request: Request):
     except ValueError as exc:
         raise HTTPException(422, detail=str(exc))
     return {"event": event.as_dict()}
+
+
+# ---- real MT5 execution (DEMO accounts only) --------------------------------------------------
+
+@router.post("/mt5/order/check")
+async def mt5_order_check(body: MT5OrderBody, request: Request):
+    """Pre-trade check. Returns READY or BLOCKED with the exact reasons, and
+    places nothing."""
+    svc = services(request)
+    news = svc.calendar.news_risk_for(body.symbol.upper())
+    result = await svc.executor.pre_trade_check(
+        body.symbol.upper(), body.direction, body.volume, body.sl, body.tp, news)
+    return result.as_dict()
+
+
+@router.post("/mt5/order")
+async def mt5_order(body: MT5OrderBody, request: Request):
+    """Place a real market order on the connected DEMO account.
+
+    Refuses unless: confirm=true, MT5 is connected, the account reports itself
+    as DEMO, and every pre-trade check passes. Reports success only on a
+    success retcode with a ticket.
+    """
+    if not body.confirm:
+        raise HTTPException(
+            400, detail="Explicit confirmation required: set confirm=true. ARES will not "
+                        "send an order to a broker implicitly.")
+    svc = services(request)
+    news = svc.calendar.news_risk_for(body.symbol.upper())
+    result = await svc.executor.place_order(
+        body.symbol.upper(), body.direction, body.volume,
+        sl=body.sl, tp=body.tp, comment=body.comment, news_warning=news)
+    await svc.alerts.emit(
+        "execution", "info" if result.success else "warning",
+        result.message, {"ticket": result.ticket, "retcode": result.retcode})
+    return result.as_dict()
+
+
+@router.get("/mt5/positions")
+async def mt5_positions(request: Request):
+    svc = services(request)
+    positions = await svc.mt5.get_positions()
+    return {"positions": positions, "connected": getattr(svc.mt5, "connected", False),
+            "message": None if positions or getattr(svc.mt5, "connected", False)
+            else "MT5 is not connected, so no broker positions can be read."}
+
+
+@router.post("/mt5/position/close")
+async def mt5_position_close(body: MT5CloseBody, request: Request):
+    if not body.confirm:
+        raise HTTPException(400, detail="Explicit confirmation required: set confirm=true.")
+    svc = services(request)
+    result = await svc.executor.close_position(body.ticket)
+    await svc.alerts.emit("execution", "info" if result.success else "warning", result.message)
+    return result.as_dict()
+
+
+@router.get("/mt5/history")
+async def mt5_history(request: Request, hours: float = 72):
+    """Closed deals from MT5 history — the source for outcome tracking."""
+    svc = services(request)
+    deals = await svc.executor.closed_deals(hours=hours)
+    return {"deals": deals, "hours": hours,
+            "message": None if deals else
+            "No closed deals returned. Either none exist in this window, or MT5 is not connected."}
 
 
 # ---- news feed -------------------------------------------------------------------------------
